@@ -42,6 +42,13 @@ interface Props {
   rename: (name: string) => void;
   preferences: Preferences;
   setPreferences: (value: Preferences) => void;
+  updateVersion?: string;
+  updateStatus?: 'idle' | 'checking' | 'downloading' | 'error';
+  updateProgress?: number;
+  updateError?: string;
+  updateMessage?: string;
+  checkForUpdate?: () => void;
+  installUpdate?: () => void;
 }
 
 type SettingsSection = 'connection' | 'appearance' | 'playback' | 'quality' | 'content' | 'about';
@@ -63,7 +70,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   return <label className="setting-toggle"><input aria-label={label} type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span aria-hidden="true" /></label>;
 }
 
-export function SettingsView({ settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, useDemo, disconnect, rename, preferences, setPreferences }: Props) {
+export function SettingsView({ settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, useDemo, disconnect, rename, preferences, setPreferences, updateVersion, updateStatus = 'idle', updateProgress = 0, updateError, updateMessage, checkForUpdate, installUpdate }: Props) {
   const [editing, setEditing] = useState(false);
   const [section, setSection] = useState<SettingsSection>('connection');
   const [displayedSection, setDisplayedSection] = useState<SettingsSection>('connection');
@@ -139,7 +146,8 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'about' && <section className="settings-section" aria-labelledby="about-heading">
           <div className="settings-section-heading"><div><h2 id="about-heading">关于</h2><p>关于 Tenma（天马）音乐播放器。</p></div></div>
           <div className="about-brand"><span className="about-brand-mark"><Radio size={22} /></span><div><strong>Tenma</strong><small>自由聆听的个人音乐库播放器</small></div></div>
-          <div className="about-list"><div><span>版本</span><strong>0.1.2</strong></div><div><span>音乐服务</span><strong>Navidrome / Subsonic API</strong></div><div><span>当前连接</span><strong>{connected ? serverLabel(connected) : '演示音乐库'}</strong></div></div>
+          <div className="about-list"><div><span>版本</span><strong>0.1.3</strong></div><div><span>音乐服务</span><strong>Navidrome / Subsonic API</strong></div><div><span>当前连接</span><strong>{connected ? serverLabel(connected) : '演示音乐库'}</strong></div></div>
+          <div className="settings-group update-settings-group"><SettingRow title="版本检测与更新" description={updateError || updateMessage || (updateVersion ? `发现新版本 ${updateVersion}` : '启动时会自动检查 GitHub Release，也可以手动检查。')}><span className="update-settings-control">{updateStatus === 'checking' && <span className="update-checking"><LoaderCircle className="spin" size={15} />检查中…</span>}{updateStatus === 'downloading' && <span className="update-checking">下载中 {updateProgress}%</span>}{updateStatus !== 'checking' && updateStatus !== 'downloading' && updateVersion && <button className="primary-button compact" onClick={installUpdate}>立即更新</button>}<button className="secondary-button compact" disabled={updateStatus === 'checking' || updateStatus === 'downloading'} onClick={checkForUpdate}>检查更新</button></span></SettingRow></div>
         </section>}
         </div>
       </div>

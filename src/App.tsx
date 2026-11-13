@@ -68,6 +68,7 @@ function indexedSongCount(albums: Album[]) {
 }
 
 type ArtistDetail = { name: string; albums: Album[]; songs: Song[] };
+type AvailableUpdate = { version: string; body?: string; downloadAndInstall: (onEvent: (event: { event: string; data?: { contentLength?: number; chunkLength?: number } }) => void) => Promise<void>; close: () => Promise<void> };
 
 function App() {
   const [mode, setMode] = useState<AppMode>('demo');
@@ -112,6 +113,11 @@ function App() {
   const librarySongRequest = useRef(0);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle');
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateError, setUpdateError] = useState('');
+  const [updateMessage, setUpdateMessage] = useState('');
   const [settings, setSettings] = useState(storedSettings);
   const [rememberPassword, setRememberPasswordState] = useState(() => storageGet('northstar.rememberPassword') === 'true');
   const [password, setPassword] = useState(() => storageGet('northstar.rememberPassword') === 'true' ? storageGet('northstar.password') : '');
@@ -147,6 +153,41 @@ function App() {
 
   useEffect(() => { storageSet('northstar.preferences', JSON.stringify(preferences)); }, [preferences]);
   useEffect(() => { setVolume(preferences.defaultVolume); }, [preferences.defaultVolume]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let update: AvailableUpdate | null = null;
+    setUpdateStatus('checking'); setUpdateMessage('');
+    import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => {
+      if (cancelled) { if (result) void result.close(); return; }
+      if (result) { update = result as AvailableUpdate; setAvailableUpdate(update); setUpdateMessage(''); }
+      else setUpdateMessage('当前已是最新版本');
+      setUpdateStatus('idle');
+    }).catch((error: unknown) => {
+      if (!cancelled) { setUpdateStatus('error'); setUpdateError(error instanceof Error ? error.message : '检查更新失败'); setUpdateMessage(''); }
+    });
+    return () => { cancelled = true; if (update) void update.close(); };
+  }, []);
+
+  const installUpdate = async () => {
+    if (!availableUpdate || updateStatus === 'downloading') return;
+    setUpdateStatus('downloading'); setUpdateProgress(0); setUpdateError('');
+    let downloaded = 0;
+    let total = 0;
+    try {
+      await availableUpdate.downloadAndInstall((event) => {
+        if (event.event === 'Started') { downloaded = 0; total = event.data?.contentLength || 0; setUpdateProgress(0); }
+        if (event.event === 'Progress') {
+          downloaded += event.data?.chunkLength || 0;
+          setUpdateProgress(total > 0 ? Math.min(99, Math.round(downloaded / total * 100)) : 0);
+        }
+        if (event.event === 'Finished') setUpdateProgress(100);
+      });
+    } catch (error) {
+      setUpdateStatus('error'); setUpdateError(error instanceof Error ? error.message : '下载更新失败');
+    }
+  };
 
   const setRememberPassword = (value: boolean) => {
     setRememberPasswordState(value);
@@ -389,9 +430,11 @@ function App() {
         <div className="top-actions"><WindowControls /></div>
       </header>
       <div className="content-scroll">
+        {availableUpdate && <section className="update-banner" aria-live="polite"><div className="update-banner-copy"><strong>Tenma 有新版本 {availableUpdate.version}</strong><span>{updateStatus === 'downloading' ? `正在下载更新… ${updateProgress}%` : updateError || '更新已准备好，可自动下载安装。'}</span></div>{updateStatus === 'downloading' ? <span className="update-progress" aria-label={`下载进度 ${updateProgress}%`}><span style={{ width: `${updateProgress}%` }} /></span> : <><button className="primary-button compact" onClick={installUpdate}>立即更新</button><button className="update-dismiss" aria-label="稍后提醒" onClick={() => { void availableUpdate.close(); setAvailableUpdate(null); }}>稍后</button></>}</section>}
+        {message && <div className="toast-spacer" />}
         {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : '!'} {message.text}<button onClick={() => setMessage(null)}><X size={15} /></button></div>}
         <div key={page} className="content-page">
-          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} useDemo={useDemo} disconnect={useDemo} rename={renameServer} preferences={preferences} setPreferences={setPreferences} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={playlistsError} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={playlistError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={albumError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={artistError} onBack={() => nav('artists')} onOpen={openAlbum} onPlay={playSong} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={albumsError} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={albumsError} playlists={playlists} playlistsError={playlistsError} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={librarySongError} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} randomSongs={randomSongs} randomLoading={randomLoading} randomError={randomError} onRefreshRandom={refreshRandom} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} /> : <HomeView albums={recentAlbums.slice(0, 8)} mode={mode} loading={loading} onOpen={openAlbum} onConnect={() => nav('settings')} />}
+          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} useDemo={useDemo} disconnect={useDemo} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={updateError} updateMessage={updateMessage} checkForUpdate={() => { if (!isTauri()) { setUpdateError('网页版本不支持自动更新，请使用 Windows 桌面版。'); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('当前已是最新版本'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(error instanceof Error ? error.message : '检查更新失败'); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={playlistsError} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={playlistError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={albumError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={artistError} onBack={() => nav('artists')} onOpen={openAlbum} onPlay={playSong} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={albumsError} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={albumsError} playlists={playlists} playlistsError={playlistsError} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={librarySongError} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} randomSongs={randomSongs} randomLoading={randomLoading} randomError={randomError} onRefreshRandom={refreshRandom} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} /> : <HomeView albums={recentAlbums.slice(0, 8)} mode={mode} loading={loading} onOpen={openAlbum} onConnect={() => nav('settings')} />}
         </div>
       </div>
     </main>

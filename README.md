@@ -82,11 +82,27 @@ git push origin v0.1.0
 
 推送 `v*` 标签后，GitHub Actions 会自动：
 
-1. 构建 Windows 安装包。
-2. 创建 GitHub Release。
-3. 上传 `.exe` 和 `.msi` 到 Release Assets。
-4. 根据上一个标签到当前标签之间的提交自动生成更新说明。
-5. 在 Release 正文中标注本次版本的安装包和更新内容。
+1. 构建并签名 Windows 安装包与更新文件。
+2. 生成 `latest.json` 更新清单。
+3. 创建 GitHub Release。
+4. 上传 `.exe`、`.msi`、签名文件和 `latest.json` 到 Release Assets。
+5. 根据上一个标签到当前标签之间的提交自动生成更新说明。
+6. 在 Release 正文中标注本次版本的安装包和更新内容。
+
+### 应用内自动更新
+
+Tenma 桌面版会在启动时检查 GitHub Release。发现新版本后，会在应用内显示更新提示，用户点击“立即更新”即可下载并安装，不需要手动查找安装包。
+
+自动更新使用 Tauri 签名验证。发布前需要在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
+
+```text
+TAURI_SIGNING_PRIVATE_KEY
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+```
+
+私钥只放在 GitHub Actions Secret 中，不能提交到仓库。公钥可以安全地写入 `src-tauri/tauri.conf.json`。同一套签名私钥必须长期保留，后续版本不能更换，否则已安装版本无法验证新更新。
+
+启用自动更新的第一个版本需要用户手动安装一次；之后的版本即可在应用内自动更新。
 
 以后发布新版本只需递增标签，例如：
 

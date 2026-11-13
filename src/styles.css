@@ -192,6 +192,16 @@ h2 { font-size: 18px; font-weight: 600; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .inline-error { color: #e9a2b1; font-size: 13px; }
+.update-banner { display: flex; align-items: center; gap: 18px; margin: -12px 0 24px; padding: 14px 16px; border: 1px solid #b7b8f433; border-radius: 18px; background: #171827; box-shadow: 0 8px 24px #0002; animation: content-page-fade .24s ease both; }
+.update-banner-copy { min-width: 0; flex: 1; }
+.update-banner-copy strong, .update-banner-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-banner-copy strong { color: #e8e9ff; font-size: 13px; font-weight: 600; }
+.update-banner-copy span { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.update-progress { width: 150px; height: 5px; overflow: hidden; border-radius: 999px; background: #ffffff18; }
+.update-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.update-dismiss { padding: 7px 2px; color: var(--muted); font-size: 11px; }
+.update-dismiss:hover { color: #eceef2; }
+.toast-spacer { height: 0; }
 .toast { position: fixed; top: 82px; right: 24px; z-index: 80; display: flex; align-items: center; gap: 9px; max-width: calc(100vw - 40px); padding: 12px 16px; color: #f0b0c3; background: #292026; border: 1px solid #ffffff16; border-radius: 12px; font-size: 12px; box-shadow: 0 8px 25px #0004; }
 .toast.success { color: #b2d5bc; background: #18251f; }
 .toast button { display: grid; place-items: center; padding: 0; }
@@ -285,6 +295,10 @@ input[type=range]:disabled { opacity: .4; cursor: default; }
 .setting-row-control { display: flex; align-items: center; flex: 0 0 auto; }
 .setting-row select { min-width: 116px; max-width: 160px; padding: 9px 10px; border: 1px solid #ffffff1c; border-radius: 9px; background: #0c0f14; color: inherit; font-size: 12px; }
 .settings-value { color: var(--muted); font-size: 12px; }
+.update-settings-group { margin-top: 18px; }
+.update-settings-control { display: flex; align-items: center; gap: 8px; }
+.update-settings-control .compact { min-height: 32px; padding: 0 11px; }
+.update-checking { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .setting-toggle { position: relative; display: block; width: 36px; height: 22px; cursor: pointer; }
 .setting-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .setting-toggle span { position: absolute; inset: 0; border: 1px solid #ffffff20; border-radius: 999px; background: #262c36; transition: background .15s, border-color .15s; }
@@ -402,6 +416,9 @@ input[type=range]:disabled { opacity: .4; cursor: default; }
   .detail-header { min-height: 0; align-items: flex-start; gap: 22px; }
   .detail-cover { width: 175px; height: 175px; flex-basis: 175px; }
   .detail-content h1 { font-size: 26px; }
+  .update-banner { align-items: flex-start; gap: 10px; margin-top: -10px; }
+  .update-banner .primary-button { flex: 0 0 auto; }
+  .update-progress { width: 100px; margin-top: 8px; }
   .toast { top: 74px; }
 }
 @media (max-width: 430px) {
