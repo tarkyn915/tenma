@@ -4,6 +4,17 @@ import { md5, normalizeServerUrl } from './utils';
 const VERSION = '1.16.1';
 const CLIENT = 'tenma';
 
+async function requestJson(url: string) {
+  // Tauri uses its Rust HTTP client in the desktop build, which avoids
+  // browser CORS restrictions. The regular browser fetch remains the web fallback.
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
+    const response = await tauriFetch(url);
+    return { ok: response.ok, status: response.status, json: () => response.json() };
+  }
+  return fetch(url);
+}
+
 type ApiEnvelope = { 'subsonic-response'?: { status?: string; error?: { message?: string }; [key: string]: unknown } };
 type ApiData = Record<string, unknown>;
 
@@ -24,7 +35,7 @@ export class NavidromeApi {
 
   private async request<T extends ApiData = ApiData>(endpoint: string, params: Record<string, string> = {}): Promise<T> {
     const query = new URLSearchParams({ u: this.username, t: this.token, s: this.salt, v: VERSION, c: CLIENT, f: 'json', ...params });
-    const response = await fetch(`${this.base}/rest/${endpoint}?${query}`);
+    const response = await requestJson(`${this.base}/rest/${endpoint}?${query}`);
     if (!response.ok) throw new Error(`服务器响应 ${response.status}`);
     const data = await response.json() as ApiEnvelope;
     const envelope = data['subsonic-response'];

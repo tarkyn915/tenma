@@ -2,7 +2,7 @@
 
 Tenma 是一个简洁的 Navidrome / Subsonic 音乐播放器，当前优先面向 Windows，前端使用 React + TypeScript + Vite。
 
-“天马”代表自由、天空和飞翔。项目先以网页版本验证交互，之后接入 Tauri 打包为 Windows 桌面应用。
+“天马”代表自由、天空和飞翔。项目先以网页版本验证交互，现在已经接入 Tauri 2，继续以 Windows 桌面应用为主要目标。
 
 ## 当前功能
 
@@ -42,18 +42,29 @@ node scripts/check.mjs
 
 在「设置 → 连接」中填写服务器地址、用户名和密码。密码不会写入 URL；如果开启“在此设备保存密码”，网页版本会写入当前浏览器本地存储。
 
-## Windows 打包路线
+## Tauri 2 Windows 开发
 
-推荐顺序：
+项目已经包含 `src-tauri/`，前端仍然使用同一套 React/Vite 页面。Tauri 桌面环境会使用 Rust HTTP 插件请求 Navidrome，浏览器开发环境继续使用普通 `fetch`。
 
-1. 先完成网页功能和视觉验证。
-2. 用 Tauri 2 接入当前 Vite 前端。
-3. Windows 环境测试 WebView2、音频、HTTPS 和 Navidrome 请求。
-4. 正式生成安装包，并把密码保存迁移到 Windows Credential Manager。
+```powershell
+cd E:\tenma
+npm.cmd install
+npm.cmd run tauri:info
+npm.cmd run tauri:dev
+```
 
-可选方案：
+正式构建安装包：
 
-- **Tauri 2**：体积小、资源占用低，适合 Tenma 的长期路线。
+```powershell
+npm.cmd run tauri:build
+```
+
+本机 Windows 构建还需要 Visual Studio Build Tools 的 C++ 工具链和 Windows SDK。当前 GitHub Actions 已配置 Windows 构建任务，推送 `v*` 标签或手动运行 workflow 即可生成安装包 artifact。
+
+后续正式版本应把密码保存迁移到 Windows Credential Manager。
+
+如果未来需要替代方案：
+
 - **Electron**：生态成熟、上手快，但安装包和内存占用更大。
 - **PWA**：最快验证和分发，但不是传统 `.exe`，系统集成能力有限。
 
