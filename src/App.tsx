@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, Music2, Pause, Play, Plus, Repeat, Search, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, X } from 'lucide-react';
 import { NavidromeApi } from './api';
@@ -38,13 +39,18 @@ function AlbumCard({ album, onOpen }: { album: Album; onOpen: (album: Album) => 
 
 function WindowControls() {
   const [desktop, setDesktop] = useState(false);
-  useEffect(() => { setDesktop(typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window); }, []);
+  useEffect(() => { setDesktop(isTauri()); }, []);
   if (!desktop) return null;
-  const currentWindow = () => getCurrentWindow();
+  const currentWindow = getCurrentWindow();
+  const runWindowAction = (event: React.MouseEvent<HTMLButtonElement>, action: () => Promise<void>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void action().catch((error: unknown) => console.error('窗口控制失败', error));
+  };
   return <div className="window-controls" aria-label="窗口控制" onPointerDown={(event) => event.stopPropagation()}>
-    <button aria-label="最小化" onClick={() => currentWindow().minimize()}><Minus size={14} /></button>
-    <button aria-label="最大化" onClick={() => currentWindow().toggleMaximize()}><Square size={12} /></button>
-    <button className="window-close" aria-label="关闭" onClick={() => currentWindow().close()}><X size={15} /></button>
+    <button type="button" aria-label="最小化" onClick={(event) => runWindowAction(event, () => currentWindow.minimize())}><Minus size={14} /></button>
+    <button type="button" aria-label="最大化" onClick={(event) => runWindowAction(event, () => currentWindow.toggleMaximize())}><Square size={12} /></button>
+    <button type="button" className="window-close" aria-label="关闭" onClick={(event) => runWindowAction(event, () => currentWindow.close())}><X size={15} /></button>
   </div>;
 }
 
@@ -376,13 +382,17 @@ function App() {
     <main className="main-content">
       <header className="topbar">
         <div className="topbar-drag-zone" data-tauri-drag-region aria-hidden="true" />
-        <button className="mobile-menu icon-button" aria-label="打开菜单" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-        <div className="history-controls"><button className="icon-button" aria-label="返回" disabled={navigation.index === 0} onClick={() => moveHistory(-1)}><ChevronLeft size={21} /></button><button className="icon-button" aria-label="前进" disabled={navigation.index === navigation.pages.length - 1} onClick={() => moveHistory(1)}><ChevronRight size={21} /></button></div>
-        <div className="top-actions"><button className="icon-button" aria-label="打开设置" onClick={() => nav('settings')}><Settings size={19} /></button><span className="avatar">{settings.username[0]?.toUpperCase() || 'N'}</span><WindowControls /></div>
+        <div className="topbar-left">
+          <button className="mobile-menu icon-button" aria-label="打开菜单" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
+        </div>
+        <div className="topbar-brand" aria-label="Tenma">Tenma</div>
+        <div className="top-actions"><WindowControls /></div>
       </header>
       <div className="content-scroll">
         {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : '!'} {message.text}<button onClick={() => setMessage(null)}><X size={15} /></button></div>}
-        {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} useDemo={useDemo} disconnect={useDemo} rename={renameServer} preferences={preferences} setPreferences={setPreferences} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={playlistsError} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={playlistError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={albumError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={artistError} onBack={() => nav('artists')} onOpen={openAlbum} onPlay={playSong} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={albumsError} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={albumsError} playlists={playlists} playlistsError={playlistsError} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={librarySongError} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} randomSongs={randomSongs} randomLoading={randomLoading} randomError={randomError} onRefreshRandom={refreshRandom} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} /> : <HomeView albums={recentAlbums.slice(0, 8)} mode={mode} loading={loading} onOpen={openAlbum} onConnect={() => nav('settings')} />} 
+        <div key={page} className="content-page">
+          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} useDemo={useDemo} disconnect={useDemo} rename={renameServer} preferences={preferences} setPreferences={setPreferences} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={playlistsError} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={playlistError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={albumError} onBack={() => moveHistory(-1)} onPlay={playSong} /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={artistError} onBack={() => nav('artists')} onOpen={openAlbum} onPlay={playSong} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={albumsError} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={albumsError} playlists={playlists} playlistsError={playlistsError} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={librarySongError} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} randomSongs={randomSongs} randomLoading={randomLoading} randomError={randomError} onRefreshRandom={refreshRandom} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} /> : <HomeView albums={recentAlbums.slice(0, 8)} mode={mode} loading={loading} onOpen={openAlbum} onConnect={() => nav('settings')} />}
+        </div>
       </div>
     </main>
     <audio ref={audioRef} onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setMessage({ type: 'error', text: '播放失败，请检查网络或音频格式。' }); }} onEnded={() => { setPlaying(false); if (preferences.autoNext) next(); }} />

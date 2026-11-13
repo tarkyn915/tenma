@@ -7,11 +7,12 @@
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
     {
       "identifier": "http:default",
-      "scope": {
-        "allow": ["http://*/*", "https://*/*"]
-      }
+      "allow": ["http://*:*", "https://*:*"]
     }
   ]
 }

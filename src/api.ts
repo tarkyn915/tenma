@@ -5,18 +5,31 @@ import { md5, normalizeServerUrl } from './utils';
 const VERSION = '1.16.1';
 const CLIENT = 'tenma';
 
+function explainConnectionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not allowed on the configured scope|url not allowed/i.test(message)) return new Error('桌面版网络权限未生效，请安装本次修复版后重试。');
+  if (/timed out|timeout|timedout/i.test(message)) return new Error('连接服务器超时，请检查地址、端口和网络。');
+  if (/dns|resolve|name or service|找不到主机/i.test(message)) return new Error('找不到服务器地址，请检查域名或 IP 是否正确。');
+  if (/failed to fetch|network|连接被拒绝|connection refused|connect error/i.test(message)) return new Error('无法连接服务器，请检查地址、端口和网络。');
+  return new Error(`无法连接服务器：${message}`);
+}
+
 async function requestJson(url: string) {
   // Tauri uses its Rust HTTP client in the desktop build, which avoids
   // browser CORS restrictions. The regular browser fetch remains the web fallback.
-  if (isTauri()) {
-    const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
-    const response = await tauriFetch(url);
-    return { ok: response.ok, status: response.status, json: () => response.json() };
+  try {
+    if (isTauri()) {
+      const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
+      const response = await tauriFetch(url, { connectTimeout: 15000, maxRedirections: 3 });
+      return { ok: response.ok, status: response.status, json: () => response.json() };
+    }
+    return await fetch(url);
+  } catch (error) {
+    throw explainConnectionError(error);
   }
-  return fetch(url);
 }
 
-type ApiEnvelope = { 'subsonic-response'?: { status?: string; error?: { message?: string }; [key: string]: unknown } };
+type ApiEnvelope = { 'subsonic-response'?: { status?: string; error?: { code?: number; message?: string }; [key: string]: unknown } };
 type ApiData = Record<string, unknown>;
 
 export class NavidromeApi {
@@ -40,7 +53,13 @@ export class NavidromeApi {
     if (!response.ok) throw new Error(`服务器响应 ${response.status}`);
     const data = await response.json() as ApiEnvelope;
     const envelope = data['subsonic-response'];
-    if (!envelope || envelope.status !== 'ok') throw new Error(envelope?.error?.message || 'Navidrome 请求失败');
+    if (!envelope || envelope.status !== 'ok') {
+      const errorCode = envelope?.error?.code;
+      const errorMessage = envelope?.error?.message || '';
+      if (errorCode === 40 || /wrong username or password|invalid username|密码错误/i.test(errorMessage)) throw new Error('用户名或密码错误，请检查账号和密码。');
+      if (errorCode === 10) throw new Error('服务器地址或请求参数无效，请检查 Navidrome 地址。');
+      throw new Error(errorMessage || 'Navidrome 请求失败');
+    }
     return envelope as T;
   }
 
