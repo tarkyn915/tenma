@@ -1,3 +1,4 @@
+import { isTauri } from '@tauri-apps/api/core';
 import type { Album, ConnectionSettings, Playlist, SearchResults, Song } from './types';
 import { md5, normalizeServerUrl } from './utils';
 
@@ -7,7 +8,7 @@ const CLIENT = 'tenma';
 async function requestJson(url: string) {
   // Tauri uses its Rust HTTP client in the desktop build, which avoids
   // browser CORS restrictions. The regular browser fetch remains the web fallback.
-  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+  if (isTauri()) {
     const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
     const response = await tauriFetch(url);
     return { ok: response.ok, status: response.status, json: () => response.json() };

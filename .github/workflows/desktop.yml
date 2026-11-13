@@ -12,11 +12,12 @@ concurrency:
   group: tenma-windows-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,9 +37,33 @@ jobs:
       - name: Build Tenma Windows app
         run: npm run tauri:build
 
-      - name: Upload installers
+      - name: Upload installers as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tenma-windows-installers
+          name: tenma-windows-${{ github.ref_name }}
           path: src-tauri/target/release/bundle/**
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Tenma ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## 天马 Tenma Windows 版本
+
+            本版本由 GitHub Actions 自动构建。
+
+            ### 下载
+
+            - `.exe`：NSIS 安装程序，适合大多数 Windows 用户
+            - `.msi`：Windows Installer 安装包
+
+            ### 本次更新
+
+            详细提交记录和变更说明由 GitHub 根据上一个版本自动生成。
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi

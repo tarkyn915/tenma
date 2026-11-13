@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Music2, Pause, Play, Plus, Repeat, Search, Settings, Shuffle, SkipBack, SkipForward, Users, Volume2, X } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, Music2, Pause, Play, Plus, Repeat, Search, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, X } from 'lucide-react';
 import { NavidromeApi } from './api';
 import { demoAlbums, demoPlaylists, demoSongs, demoSearch } from './demoData';
 import type { Album, AppMode, ConnectionSettings, Playlist, PlayerTrack, SearchResults, Song } from './types';
@@ -33,6 +34,18 @@ function AlbumCard({ album, onOpen }: { album: Album; onOpen: (album: Album) => 
     <div className="album-art-wrap"><Cover src={album.coverArt} alt={album.name} className="album-art" /><span className="play-overlay"><Play fill="currentColor" size={18} /></span></div>
     <span className="album-name">{album.name}</span><span className="album-artist">{album.artist}</span>
   </button>;
+}
+
+function WindowControls() {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => { setDesktop(typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window); }, []);
+  if (!desktop) return null;
+  const currentWindow = () => getCurrentWindow();
+  return <div className="window-controls" aria-label="窗口控制" onPointerDown={(event) => event.stopPropagation()}>
+    <button aria-label="最小化" onClick={() => currentWindow().minimize()}><Minus size={14} /></button>
+    <button aria-label="最大化" onClick={() => currentWindow().toggleMaximize()}><Square size={12} /></button>
+    <button className="window-close" aria-label="关闭" onClick={() => currentWindow().close()}><X size={15} /></button>
+  </div>;
 }
 
 function sampleSongs(songs: Song[], size = 10) {
@@ -343,7 +356,6 @@ function App() {
 
   return <div className={cn('app-shell', !preferences.showArtists && 'hide-album-artists', !preferences.showDurations && 'hide-song-durations', preferences.accent === 'blue' && 'accent-blue')}>
     <aside className={cn('sidebar', mobileNav && 'mobile-open')}>
-      <div className="brand"><Music2 size={23} /><span>Tenma</span><small>天马</small></div>
       <div className="server-switcher" ref={serverSwitcherRef}>
         <button ref={serverButtonRef} className="server-switcher-button" aria-label={`切换服务器：${currentServerName}`} aria-expanded={serverMenuOpen} aria-controls="server-options" onClick={() => setServerMenuOpen((open) => !open)}><span className={cn('status-dot', isConnected && 'online')} /><span className="server-switcher-copy"><strong>{currentServerName}</strong><small>{isConnected ? 'Navidrome · 已连接' : '空白预览'}</small></span><ChevronDown size={16} /></button>
         {serverMenuOpen && <div className="server-menu" id="server-options" aria-label="服务器选项">
@@ -363,9 +375,10 @@ function App() {
     {mobileNav && <button className="nav-scrim" aria-label="关闭菜单" onClick={() => setMobileNav(false)} />}
     <main className="main-content">
       <header className="topbar">
+        <div className="topbar-drag-zone" data-tauri-drag-region aria-hidden="true" />
         <button className="mobile-menu icon-button" aria-label="打开菜单" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
         <div className="history-controls"><button className="icon-button" aria-label="返回" disabled={navigation.index === 0} onClick={() => moveHistory(-1)}><ChevronLeft size={21} /></button><button className="icon-button" aria-label="前进" disabled={navigation.index === navigation.pages.length - 1} onClick={() => moveHistory(1)}><ChevronRight size={21} /></button></div>
-        <div className="top-actions"><button className="icon-button" aria-label="打开设置" onClick={() => nav('settings')}><Settings size={19} /></button><span className="avatar">{settings.username[0]?.toUpperCase() || 'N'}</span></div>
+        <div className="top-actions"><button className="icon-button" aria-label="打开设置" onClick={() => nav('settings')}><Settings size={19} /></button><span className="avatar">{settings.username[0]?.toUpperCase() || 'N'}</span><WindowControls /></div>
       </header>
       <div className="content-scroll">
         {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : '!'} {message.text}<button onClick={() => setMessage(null)}><X size={15} /></button></div>}

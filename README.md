@@ -68,6 +68,44 @@ npm.cmd run tauri:build
 - **Electron**：生态成熟、上手快，但安装包和内存占用更大。
 - **PWA**：最快验证和分发，但不是传统 `.exe`，系统集成能力有限。
 
+## 发布 Windows 版本
+
+推送普通提交到 `main` 时，GitHub Actions 会自动构建并保存测试用安装包到 Actions Artifacts。
+
+正式发布时使用版本标签：
+
+```powershell
+cd E:\tenma
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+推送 `v*` 标签后，GitHub Actions 会自动：
+
+1. 构建 Windows 安装包。
+2. 创建 GitHub Release。
+3. 上传 `.exe` 和 `.msi` 到 Release Assets。
+4. 根据上一个标签到当前标签之间的提交自动生成更新说明。
+5. 在 Release 正文中标注本次版本的安装包和更新内容。
+
+以后发布新版本只需递增标签，例如：
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+建议提交信息使用清晰的前缀，GitHub 自动更新说明会更容易阅读：
+
+```text
+feat: 新功能
+fix: 修复问题
+perf: 性能优化
+style: 界面调整
+docs: 文档更新
+chore: 工程配置
+```
+
 ## GitHub 持续开发
 
 初始化本地仓库并提交：
