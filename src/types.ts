@@ -18,6 +18,16 @@ export interface Song {
   streamUrl?: string;
 }
 
+export interface LyricLine {
+  text: string;
+  start?: number;
+}
+
+export interface LyricsResult {
+  lines: LyricLine[];
+  synced: boolean;
+}
+
 export interface Album {
   id: string;
   name: string;

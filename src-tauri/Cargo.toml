@@ -1,7 +1,7 @@
 [package]
 name = "tenma"
 version = "0.1.3"
-description = "Tenma 天马音乐"
+description = "Tenma Player - a clean Navidrome music player"
 authors = ["tarkyn915"]
 license = "MIT"
 repository = "https://github.com/tarkyn915/tenma"

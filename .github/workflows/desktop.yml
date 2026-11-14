@@ -34,14 +34,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build signed Tenma Windows app for releases
+      - name: Build signed Tenma Player Windows app for releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build -- --config src-tauri/tauri.release.conf.json
 
-      - name: Build unsigned Tenma Windows app for main
+      - name: Build unsigned Tenma Player Windows app for main
         if: github.ref == 'refs/heads/main'
         run: npm run tauri:build
 
@@ -55,12 +55,12 @@ jobs:
             -Repository '${{ github.repository }}' `
             -BundleDirectory 'src-tauri/target/release/bundle' `
             -OutputPath 'src-tauri/target/release/bundle/latest.json' `
-            -Notes "Tenma $version 自动更新版本"
+            -Notes "Tenma Player $version update"
 
       - name: Upload installers as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tenma-windows-${{ github.ref_name }}
+          name: tenma-player-windows-${{ github.ref_name }}
           path: src-tauri/target/release/bundle/**
           if-no-files-found: error
 
@@ -69,19 +69,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Tenma ${{ github.ref_name }}
+          name: Tenma Player ${{ github.ref_name }}
           generate_release_notes: true
           body: |
-            ## 天马 Tenma Windows 版本
+            ## Tenma Player for Windows
 
-            本版本由 GitHub Actions 自动构建，支持应用内自动更新。
+            This release was built by GitHub Actions and supports in-app updates.
 
-            ### 下载
+            ### Downloads
 
-            - `.exe`：NSIS 安装程序，适合大多数 Windows 用户
-            - `.msi`：Windows Installer 安装包
+            - `.exe`: NSIS installer for most Windows users
+            - `.msi`: Windows Installer package
 
-            安装后，后续版本可以直接在 Tenma 内下载和安装，不需要手动寻找安装包。
+            After installation, future releases can be downloaded and installed directly from Tenma Player.
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
