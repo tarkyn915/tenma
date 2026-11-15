@@ -1,4 +1,4 @@
-export type AppMode = 'demo' | 'server';
+export type AppMode = 'local' | 'server';
 
 export interface Artist {
   id: string;
@@ -14,8 +14,10 @@ export interface Song {
   albumId?: string;
   duration?: number;
   track?: number;
+  bitRate?: number;
   coverArt?: string;
   streamUrl?: string;
+  localPath?: string;
 }
 
 export interface LyricLine {
@@ -65,5 +67,5 @@ export interface ConnectionSettings {
 }
 
 export interface PlayerTrack extends Song {
-  source: 'demo' | 'server';
+  source: 'local' | 'server';
 }

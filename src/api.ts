@@ -1,17 +1,18 @@
 import { isTauri } from '@tauri-apps/api/core';
 import type { Album, ConnectionSettings, LyricsResult, Playlist, SearchResults, Song } from './types';
 import { md5, normalizeServerUrl } from './utils';
+import { LocalizedError } from './errors';
 
 const VERSION = '1.16.1';
 const CLIENT = 'tenma';
 
 function explainConnectionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/not allowed on the configured scope|url not allowed/i.test(message)) return new Error('Desktop network permissions are not active. Install the latest fixed build and try again.');
-  if (/timed out|timeout|timedout/i.test(message)) return new Error('The connection timed out. Check the server address, port, and network.');
-  if (/dns|resolve|name or service|\u627e\u4e0d\u5230\u4e3b\u673a/i.test(message)) return new Error('The server address could not be found. Check the domain or IP address.');
-  if (/failed to fetch|network|connection refused|connect error|\u8fde\u63a5\u88ab\u62d2\u7edd/i.test(message)) return new Error('Unable to connect to the server. Check the address, port, and network.');
-  return new Error(`Unable to connect to the server: ${message}`);
+  if (/not allowed on the configured scope|url not allowed/i.test(message)) return new LocalizedError('api.permissions', 'Desktop network permissions are not active. Install the latest fixed build and try again.');
+  if (/timed out|timeout|timedout/i.test(message)) return new LocalizedError('api.timeout', 'The connection timed out. Check the server address, port, and network.');
+  if (/dns|resolve|name or service|\u627e\u4e0d\u5230\u4e3b\u673a/i.test(message)) return new LocalizedError('api.notFound', 'The server address could not be found. Check the domain or IP address.');
+  if (/failed to fetch|network|connection refused|connect error|\u8fde\u63a5\u88ab\u62d2\u7edd/i.test(message)) return new LocalizedError('api.unavailable', 'Unable to connect to the server. Check the address, port, and network.');
+  return new LocalizedError('api.unavailableWithDetail', `Unable to connect to the server: ${message}`, { error: message });
 }
 
 async function requestJson(url: string) {
@@ -51,15 +52,16 @@ export class NavidromeApi {
   private async request<T extends ApiData = ApiData>(endpoint: string, params: Record<string, string> = {}): Promise<T> {
     const query = new URLSearchParams({ u: this.username, t: this.token, s: this.salt, v: VERSION, c: CLIENT, f: 'json', ...params });
     const response = await requestJson(`${this.base}/rest/${endpoint}?${query}`);
-    if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+    if (!response.ok) throw new LocalizedError('api.httpStatus', `Server responded with ${response.status}`, { status: response.status });
     const data = await response.json() as ApiEnvelope;
     const envelope = data['subsonic-response'];
     if (!envelope || envelope.status !== 'ok') {
       const errorCode = envelope?.error?.code;
       const errorMessage = envelope?.error?.message || '';
-      if (errorCode === 40 || /wrong username or password|invalid username|\u5bc6\u7801\u9519\u8bef/i.test(errorMessage)) throw new Error('Incorrect username or password. Check your credentials.');
-      if (errorCode === 10) throw new Error('The server address or request parameters are invalid. Check the Navidrome address.');
-      throw new Error(errorMessage || 'Navidrome request failed');
+      if (errorCode === 40 || /wrong username or password|invalid username|\u5bc6\u7801\u9519\u8bef/i.test(errorMessage)) throw new LocalizedError('api.incorrectCredentials', 'Incorrect username or password. Check your credentials.');
+      if (errorCode === 10) throw new LocalizedError('api.invalidRequest', 'The server address or request parameters are invalid. Check the Navidrome address.');
+      if (errorMessage) throw new Error(errorMessage);
+      throw new LocalizedError('api.requestFailed', 'Navidrome request failed');
     }
     return envelope as T;
   }
@@ -92,14 +94,14 @@ export class NavidromeApi {
       const data = await this.request<{ albumList2?: { album?: Record<string, unknown>[] } }>('getAlbumList2.view', { type: 'alphabeticalByName', size: String(size), offset: String(page * size) });
       const batch = data.albumList2?.album || [];
       const fresh = batch.filter((item) => item.id && !seen.has(String(item.id)));
-      if (batch.length && !fresh.length) throw new Error('The server returned invalid album pagination. Please try again.');
+      if (batch.length && !fresh.length) throw new LocalizedError('api.invalidPagination', 'The server returned invalid album pagination. Please try again.');
       for (const item of fresh) { seen.add(String(item.id)); albums.push(this.mapAlbum(item)); }
       if (batch.length < size) return albums;
     }
-    throw new Error('The album count exceeds the loading limit.');
+    throw new LocalizedError('api.tooManyAlbums', 'The album count exceeds the loading limit.');
   }
 
-  async randomSongs(size = 10): Promise<Song[]> {
+  async randomSongs(size = 12): Promise<Song[]> {
     const data = await this.request<{ randomSongs?: { song?: Record<string, unknown>[] } }>('getRandomSongs.view', { size: String(Math.min(12, Math.max(1, size))) });
     return (data.randomSongs?.song || []).map((item) => this.mapSong(item));
   }
@@ -145,7 +147,7 @@ export class NavidromeApi {
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/auth|permission|login|incorrect username or password|\u8ba4\u8bc1|\u6743\u9650|\u767b\u5f55/i.test(message)) throw error;
-      throw new Error('The song list is temporarily unavailable. Please try again later.');
+      throw new LocalizedError('error.songListUnavailable', 'The song list is temporarily unavailable. Please try again later.');
     }
   }
 
@@ -156,6 +158,15 @@ export class NavidromeApi {
     return album;
   }
 
+  async artistAlbums(id: string): Promise<Album[]> {
+    const data = await this.request<{ artist?: { album?: Record<string, unknown>[] } }>('getArtist.view', { id });
+    return (data.artist?.album || []).map((item) => this.mapAlbum(item));
+  }
+
+  async addToPlaylist(playlistId: string, songId: string): Promise<void> {
+    await this.request('updatePlaylist.view', { playlistId, songIdToAdd: songId });
+  }
+
   async playlists(): Promise<Playlist[]> {
     const data = await this.request<{ playlists?: { playlist?: Record<string, unknown>[] } }>('getPlaylists.view');
     return (data.playlists?.playlist || []).map((item) => this.mapPlaylist(item));
@@ -163,7 +174,7 @@ export class NavidromeApi {
 
   async playlist(id: string): Promise<Playlist> {
     const data = await this.request<{ playlist?: Record<string, unknown> }>('getPlaylist.view', { id });
-    if (!data.playlist) throw new Error('The server did not return playlist details.');
+    if (!data.playlist) throw new LocalizedError('api.missingPlaylist', 'The server did not return playlist details.');
     return this.mapPlaylist(data.playlist, true);
   }
 
@@ -222,6 +233,6 @@ export class NavidromeApi {
 
   private mapSong(item: Record<string, unknown>): Song {
     const id = String(item.id || '');
-    return { id, title: String(item.title || 'Untitled song'), artist: String(item.artist || 'Unknown artist'), artistId: item.artistId ? String(item.artistId) : undefined, album: String(item.album || ''), albumId: item.albumId ? String(item.albumId) : undefined, duration: item.duration ? Number(item.duration) : undefined, track: item.track ? Number(item.track) : undefined, coverArt: this.coverUrl(item.coverArt ? String(item.coverArt) : undefined), streamUrl: this.streamUrl(id) };
+    return { id, title: String(item.title || 'Untitled song'), artist: String(item.artist || 'Unknown artist'), artistId: item.artistId ? String(item.artistId) : undefined, album: String(item.album || ''), albumId: item.albumId ? String(item.albumId) : undefined, duration: item.duration ? Number(item.duration) : undefined, track: item.track ? Number(item.track) : undefined, bitRate: item.bitRate ? Number(item.bitRate) : undefined, coverArt: this.coverUrl(item.coverArt ? String(item.coverArt) : undefined), streamUrl: this.streamUrl(id) };
   }
 }

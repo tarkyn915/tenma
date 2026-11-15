@@ -24,7 +24,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
     }
   },
   "bundle": {
@@ -36,7 +40,9 @@
         "upgradeCode": "5220f896-b91f-52d0-a086-c543c7f14bf2"
       },
       "nsis": {
-        "installerHooks": "./windows/installer-hooks.nsh"
+        "installerHooks": "./windows/installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "icon": [

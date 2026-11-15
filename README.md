@@ -4,7 +4,7 @@
 
 # Tenma Player
 
-**A clean, minimal music player for Navidrome and Subsonic-compatible servers.**
+**A clean, minimal music player for Navidrome, Subsonic-compatible servers, and local folders.**
 
 Your library. Your music. A focused listening experience.
 
@@ -17,27 +17,29 @@ Your library. Your music. A focused listening experience.
 
 ---
 
-Tenma Player brings your personal music server into a simple desktop interface. Browse your collection, find something to play, and open the Now Playing view for artwork and lyrics. Built with React, TypeScript, Vite, and Tauri 2, with Windows as the current desktop target.
+Tenma Player brings your music into a simple desktop interface. Connect a Navidrome or Subsonic-compatible server, or point it at a local folder on your computer, then browse, search, and play. Built with React, TypeScript, Vite, and Tauri 2, with Windows as the current desktop target.
 
 ## Made for listening
 
-- **A clean interface** — dark surfaces, rounded controls, and responsive layouts that adapt to your window.
-- **Your music library** — browse albums, artists, playlists, and tracks from Navidrome or a Subsonic-compatible server.
+- **A clean interface** — dark surfaces, rounded controls, responsive layouts, and two themes (**Midnight** and **Graphite**).
+- **Two sources, one library** — use a local folder as your library, or connect a Navidrome / Subsonic-compatible server. Local mode scans subfolders, reads tags, bitrate, and artwork, and remembers your folder between sessions.
 - **Search and discovery** — search your collection or refresh random recommendations.
 - **Now Playing** — large artwork, track details, playback controls, and lyrics. Timed lyrics support highlighting and seeking when supplied by your server.
-- **Everyday controls** — play, pause, seek, shuffle, repeat, and manage the queue. Scroll over the volume control to adjust it, or click its icon to mute and restore the previous volume.
+- **Everyday controls** — play, pause, seek, shuffle, repeat, and manage the queue. Right-click a track (or use its menu button) to add it to a playlist or jump to its artist and album. Scroll over the volume control to adjust it, or click its icon to mute and restore the previous volume.
+- **Localized** — switch between English and Simplified Chinese in **Settings → General**.
+- **Runs in the background** — minimize to the system tray and reopen from its icon without quitting playback.
 - **In-app updates** — check for signed releases at startup or from **Settings → About**; download and install without finding an installer yourself.
 
-Tenma Player is a client for your music server. It does not include a music catalog or bundled demo tracks.
+Tenma Player plays music from your own library — a local folder or a Navidrome / Subsonic server. It ships empty and never bundles demo tracks.
 
 ## Get started
 
 1. Download the latest Windows x64 installer from [Releases](https://github.com/tarkyn915/tenma/releases/latest). Choose the `.exe` for a regular installation; an `.msi` is also available.
 2. Install and open **Tenma Player**.
-3. Go to **Settings → Connection**, enter your server address and credentials, and select **Test and connect**.
+3. Choose a source in **Settings → Connection**: pick a **Local folder** (and optionally rescan it later), or enter a server address and credentials and select **Test and connect**.
 4. Play a track. Click its artwork or title in the bottom player to open **Now Playing**.
 
-Custom ports and server subpaths are supported. Use your server's base address, such as `https://music.example.com` or `http://localhost:4533`.
+Custom ports and server subpaths are supported. Use your server's base address, such as `https://music.example.com` or `http://localhost:4533`. Local mode supports MP3, FLAC, WAV, OGG, OPUS, M4A, and AAC.
 
 Lyrics availability and timing depend on your server and music files. Some older servers only provide plain-text lyrics.
 
@@ -108,15 +110,16 @@ The release configuration is `src-tauri/tauri.release.conf.json`; `scripts/creat
 
 | Path | Purpose |
 | --- | --- |
-| `src/` | React UI, playback state, server API, and Now Playing view |
-| `src-tauri/` | Native desktop shell, permissions, icons, and packaging |
+| `src/` | React UI, playback state, server and local-library APIs, and Now Playing view |
+| `src-tauri/` | Native desktop shell, tray, local-folder scanning, permissions, icons, and packaging |
 | `.github/workflows/` | Build checks and Windows release automation |
-| `scripts/` | API/UI checks and updater manifest generation |
+| `scripts/` | API/UI checks, layout and interaction checks, icon tooling, and updater manifest generation |
 
 ## Current notes
 
 - Optional password saving uses local browser/WebView storage rather than the operating system's credential vault.
 - The audio quality preference is saved but is not yet applied to stream transcoding parameters.
+- Local mode reads embedded tags and `cover.*` / `folder.*` artwork; it does not download lyrics.
 - The current desktop release targets Windows x64. Other desktop platforms are not published yet.
 
 ## License

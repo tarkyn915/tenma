@@ -1,15 +1,11 @@
-import type { Album, Playlist, SearchResults, Song } from './types';
+import type { Song, SearchResults } from './types';
+import { emptyLocalSongs } from './localLibrary';
 
-// Tenma starts with an empty demo library. Connect Navidrome to load real music.
-export const demoSongs: Song[] = [];
-export const demoAlbums: Album[] = [];
-export const demoPlaylists: Playlist[] = [];
+/** @deprecated Tenma now uses Local mode. These aliases remain only for older integrations. */
+export { emptyLocalAlbums as demoAlbums, emptyLocalPlaylists as demoPlaylists, emptyLocalSongs as demoSongs } from './localLibrary';
 
-export const demoSearch = (_query: string): SearchResults => ({
-  songs: [],
-  albums: [],
-  artists: []
-});
+/** @deprecated Use the current local song state instead. */
+export const emptyDemoSong = (): Song[] => emptyLocalSongs;
 
-// Kept as an explicit helper for callers that want to present an empty demo state.
-export const emptyDemoSong = (): Song[] => [];
+/** @deprecated Use searchLocalLibrary with the current local songs instead. */
+export const demoSearch = (_query: string): SearchResults => ({ songs: [], albums: [], artists: [] });

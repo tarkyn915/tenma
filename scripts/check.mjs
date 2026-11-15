@@ -9,8 +9,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const require = createRequire(import.meta.url);
 const storage = new Map();
 globalThis.localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
-async function load(path, expose = '') {
-  const input = expose ? { stdin: { contents: `${await readFile(path, 'utf8')}\nexport { ${expose} };`, resolveDir: resolve(dirname(path)), loader: 'tsx' } } : { entryPoints: [path] };
+async function load(path, expose = '', extraExports = '') {
+  const contents = `${await readFile(path, 'utf8')}${expose ? `\nexport { ${expose} };` : ''}${extraExports ? `\n${extraExports}` : ''}`;
+  const input = expose || extraExports ? { stdin: { contents, resolveDir: resolve(dirname(path)), loader: 'tsx' } } : { entryPoints: [path] };
   const result = await build({ ...input, bundle: true, platform: 'node', format: 'cjs', write: false, packages: 'external', jsx: 'automatic' });
   const module = { exports: {} };
   new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
@@ -34,13 +35,19 @@ assert.equal(playlists[0].name, 'My playlist \u97f3\u4e50');
 assert.equal(playlists[0].public, false);
 assert.equal(new URL(playlists[0].coverArt).searchParams.get('id'), 'pl-cover');
 assert.equal(playlists[0].songs, undefined);
-envelope = { status: 'ok', playlist: { id: 'p 1', name: 'My playlist \u97f3\u4e50', entry: [{ id: 'song/1', title: 'Track \u97f3\u4e50', artist: 'Artist', duration: 123 }] } };
+envelope = { status: 'ok', playlist: { id: 'p 1', name: 'My playlist \u97f3\u4e50', entry: [{ id: 'song/1', title: 'Track \u97f3\u4e50', artist: 'Artist', duration: 123, bitRate: 320 }] } };
 const detail = await api.playlist('p 1');
 assert.equal(lastUrl.pathname, '/rest/getPlaylist.view');
 assert.equal(lastUrl.searchParams.get('id'), 'p 1');
 assert.equal(detail.songs[0].title, 'Track \u97f3\u4e50');
 assert.equal(new URL(detail.songs[0].streamUrl).searchParams.get('id'), 'song/1');
 assert.equal(detail.songCount, 1);
+assert.equal(detail.songs[0].bitRate, 320);
+envelope = { status: 'ok' };
+await api.addToPlaylist('p 1', 'song/1');
+assert.equal(lastUrl.pathname, '/rest/updatePlaylist.view');
+assert.equal(lastUrl.searchParams.get('playlistId'), 'p 1');
+assert.equal(lastUrl.searchParams.get('songIdToAdd'), 'song/1');
 envelope = { status: 'ok', playlist: { id: 'empty', name: 'Empty playlist' } };
 assert.deepEqual((await api.playlist('empty')).songs, []);
 envelope = { status: 'ok' };
@@ -49,9 +56,22 @@ await assert.rejects(api.playlist('missing'), /The server did not return playlis
 envelope = { status: 'failed', error: { message: 'Authentication failed' } };
 await assert.rejects(api.playlists(), /Authentication failed/);
 await assert.rejects(api.playlist('x'), /Authentication failed/);
+envelope = { status: 'failed', error: { code: 40, message: 'Wrong username or password' } };
+const credentialError = await api.playlists().catch((error) => error);
+assert.equal(credentialError.key, 'api.incorrectCredentials');
+assert.equal(credentialError.message, 'Incorrect username or password. Check your credentials.');
 globalThis.fetch = async () => ({ ok: false, status: 503 });
 await assert.rejects(api.playlists(), /503/);
 console.log('PASS: playlist API endpoints, auth, field mapping, streams, empty lists and errors');
+globalThis.fetch = async (url) => { lastUrl = new URL(url); return { ok: true, json: async () => ({ 'subsonic-response': envelope }) }; };
+envelope = { status: 'ok', artist: { id: 'artist/1', name: 'Artist', album: [{ id: 'artist-album-1', name: 'Artist album', artist: 'Artist', artistId: 'artist/1', songCount: 3 }] } };
+const artistAlbums = await api.artistAlbums('artist/1');
+assert.equal(lastUrl.pathname, '/rest/getArtist.view');
+assert.equal(lastUrl.searchParams.get('id'), 'artist/1');
+assert.equal(artistAlbums[0].id, 'artist-album-1');
+assert.equal(artistAlbums[0].artistId, 'artist/1');
+assert.equal(artistAlbums[0].songCount, 3);
+console.log('PASS: artist album lookup uses getArtist and preserves IDs');
 
 const offsets = [];
 globalThis.fetch = async (url) => {
@@ -81,7 +101,7 @@ globalThis.fetch = async (url) => {
 envelope = { status: 'ok', randomSongs: { song: [{ id: 'random-1', title: 'Random song', artist: 'Artist', coverArt: 'cover-1', albumId: 'a1', duration: 123 }] } };
 const random = await api.randomSongs();
 assert.equal(lastUrl.pathname, '/rest/getRandomSongs.view');
-assert.equal(lastUrl.searchParams.get('size'), '10');
+assert.equal(lastUrl.searchParams.get('size'), '12');
 assert.equal(random[0].title, 'Random song');
 assert.equal(new URL(random[0].streamUrl).searchParams.get('id'), 'random-1');
 assert.equal(new URL(random[0].coverArt).searchParams.get('id'), 'cover-1');
@@ -110,28 +130,70 @@ await assert.rejects(api.randomSongs(), /Authentication failed/);
 await assert.rejects(api.allAlbums(), /Authentication failed/);
 console.log('PASS: complete 647-album pagination, offset loop defense, random song mapping and API errors');
 
-const { SettingsView, loadPreferences, serverLabel } = await load('src/SettingsView.tsx');
+const capabilities = JSON.parse(await readFile('src-tauri/capabilities/default.json', 'utf8'));
+for (const permission of ['core:window:allow-minimize', 'core:window:allow-toggle-maximize', 'core:window:allow-close', 'core:window:allow-destroy', 'core:window:allow-hide']) {
+  assert.ok(capabilities.permissions.includes(permission), `Missing window permission: ${permission}`);
+}
+console.log('PASS: native window controls have minimize, maximize, close, destroy and hide permissions');
+
+const { loadLanguage, saveLanguage, translate, errorContent, resolveMessage, LocalizedError } = await load('src/i18n.ts', '', "export { LocalizedError } from './errors';");
+storage.delete('tenma.language');
+assert.equal(loadLanguage(), 'en', 'English must be the default language');
+saveLanguage('zh-CN');
+assert.equal(storage.get('tenma.language'), 'zh-CN');
+assert.equal(loadLanguage(), 'zh-CN');
+assert.equal(translate('zh-CN', 'settings.general.language'), '显示语言');
+assert.equal(translate('en', 'count.tracks', { count: 12 }), '12 tracks');
+assert.equal(translate('zh-CN', 'count.tracks', { count: 12 }), '12 首歌曲');
+const englishT = (key, values) => translate('en', key, values);
+const chineseT = (key, values) => translate('zh-CN', key, values);
+const credentialContent = errorContent(new LocalizedError('api.incorrectCredentials', 'Incorrect username or password. Check your credentials.'), 'error.connection');
+assert.equal(resolveMessage(credentialContent, englishT), 'Incorrect username or password. Check your credentials.');
+assert.equal(resolveMessage(credentialContent, chineseT), '用户名或密码错误，请检查登录凭据。');
+assert.equal(errorContent(new Error('Server-specific failure'), 'error.connection'), 'Server-specific failure');
+const nestedContent = { key: 'error.connectedWithErrors', values: { name: 'Home', errors: [{ key: 'error.named', values: { label: { key: 'error.songsLabel' }, error: { key: 'api.httpStatus', values: { status: 503 } } } }] } };
+assert.equal(resolveMessage(nestedContent, chineseT), '已连接至 Home；部分内容加载失败（歌曲：服务器返回状态码 503）');
+assert.equal(resolveMessage({ key: 'message.localMode' }, englishT), 'Switched to Local mode');
+assert.equal(resolveMessage({ key: 'message.localMode' }, chineseT), '已切换到本地模式');
+storage.set('tenma.language', 'unsupported');
+assert.equal(loadLanguage(), 'en', 'Invalid stored languages must fall back to English');
+storage.delete('tenma.language');
+console.log('PASS: English default, Chinese translations, interpolation and language persistence');
+
+const { SettingsView, SettingSelect, loadPreferences, serverLabel, I18nContext } = await load('src/SettingsView.tsx', '', "export { SettingSelect }; export { I18nContext } from './i18n';");
 const preferences = loadPreferences();
 assert.equal(preferences.defaultVolume, 0.78);
+assert.equal(preferences.theme, 'dark');
 storage.set('northstar.preferences', '{broken');
 assert.deepEqual(loadPreferences(), preferences);
-storage.set('northstar.preferences', JSON.stringify({ defaultVolume: 5, startPage: 'playlists', showArtists: false, showDurations: false }));
+storage.set('northstar.preferences', JSON.stringify({ defaultVolume: 5, startPage: 'playlists', showArtists: false, showDurations: false, theme: 'gray' }));
 assert.equal(loadPreferences().defaultVolume, 1);
 assert.equal(loadPreferences().startPage, 'playlists');
 assert.equal(loadPreferences().showArtists, false);
+assert.equal(loadPreferences().theme, 'gray');
 assert.equal(serverLabel({ server: 'https://music.example.com/', username: '' }), 'music.example.com');
 const settings = { server: 'https://music.example.com', username: 'listener', serverName: 'Home music library' };
 const noop = () => {};
-const props = { settings, setSettings: noop, password: '', setPassword: noop, rememberPassword: false, setRememberPassword: noop, connect: noop, loading: false, useDemo: noop, disconnect: noop, rename: noop, preferences, setPreferences: noop };
+const props = { settings, setSettings: noop, password: '', setPassword: noop, rememberPassword: false, setRememberPassword: noop, connect: noop, loading: false, mode: 'server', useLocal: noop, disconnect: noop, localFolder: '', localLoading: false, localSongCount: 0, chooseLocalFolder: noop, rescanLocalLibrary: noop, rename: noop, preferences, setPreferences: noop };
 const disconnected = renderToStaticMarkup(React.createElement(SettingsView, { ...props, connected: null }));
 assert.ok(disconnected.includes('Test and connect'));
 assert.ok(disconnected.includes('aria-label="Settings sections"'));
-for (const category of ['Connection', 'Appearance', 'Playback', 'Quality', 'Content', 'About']) assert.ok(disconnected.includes(category));
+for (const category of ['General', 'Connection', 'Appearance', 'Playback', 'Quality', 'Content', 'About']) assert.ok(disconnected.includes(category));
+assert.ok(disconnected.includes('Language and app preferences'));
 assert.ok(!disconnected.includes('Auto-play next song'), 'Only the active settings category should render');
 const connected = renderToStaticMarkup(React.createElement(SettingsView, { ...props, connected: settings }));
 assert.ok(connected.includes('Connected to Home music library'));
 assert.ok(connected.includes('Disconnect / switch server'));
 assert.ok(!connected.includes('type="password"'));
+const localSettings = renderToStaticMarkup(React.createElement(SettingsView, { ...props, mode: 'local', connected: null }));
+assert.ok(localSettings.includes('Local mode'));
+assert.ok(localSettings.includes('Remote server'));
+assert.ok(localSettings.includes('Choose folder'));
+assert.ok(!localSettings.includes('Test and connect'));
+const selectHtml = renderToStaticMarkup(React.createElement(SettingSelect, { label: 'Theme', value: 'gray', options: [{ value: 'dark', label: 'Midnight' }, { value: 'gray', label: 'Graphite' }], onChange: noop }));
+assert.ok(selectHtml.includes('settings-select-trigger'));
+assert.ok(selectHtml.includes('Graphite'));
+assert.ok(!selectHtml.includes('role="listbox"'));
 const { default: App } = await load('src/App.tsx');
 const html = renderToStaticMarkup(React.createElement(App));
 assert.ok(html.includes('aria-label="Main navigation"'));
@@ -140,6 +202,9 @@ assert.ok(!html.includes('\u591c\u95f4\u6f2b\u6e38'));
 assert.ok(!html.includes('\u6e05\u6668\u7075\u611f'));
 assert.ok(html.includes('hide-album-artists'));
 assert.ok(html.includes('hide-song-durations'));
+assert.ok(html.includes('theme-gray'));
+assert.ok(html.includes('Local mode'));
+assert.ok(!html.includes('Demo mode'));
 storage.set('northstar.preferences', JSON.stringify({ startPage: 'library' }));
 const libraryHtml = renderToStaticMarkup(React.createElement(App));
 assert.ok(libraryHtml.includes('library-stats'));
@@ -153,24 +218,64 @@ storage.set('northstar.preferences', JSON.stringify({ startPage: 'home' }));
 const homeHtml = renderToStaticMarkup(React.createElement(App));
 assert.ok(homeHtml.includes('Recently added'));
 assert.ok(homeHtml.includes('No albums yet'));
+assert.ok(homeHtml.includes('Choose folder'));
 assert.ok(!homeHtml.includes('After Hours'));
-console.log('PASS: settings categories, preference validation, startup pages and library overview SSR');
+storage.set('tenma.language', 'zh-CN');
+const chineseHomeHtml = renderToStaticMarkup(React.createElement(App));
+assert.ok(chineseHomeHtml.includes('最近添加'));
+assert.ok(chineseHomeHtml.includes('本地模式'));
+assert.ok(chineseHomeHtml.includes('暂无专辑'));
+assert.ok(!chineseHomeHtml.includes('Recently added'));
+const chineseSettingsHtml = renderToStaticMarkup(React.createElement(I18nContext.Provider, {
+  value: { language: 'zh-CN', setLanguage: noop, t: (key, values) => translate('zh-CN', key, values) }
+}, React.createElement(SettingsView, { ...props, connected: null })));
+assert.ok(chineseSettingsHtml.includes('设置'));
+assert.ok(chineseSettingsHtml.includes('通用'));
+assert.ok(chineseSettingsHtml.includes('语言与应用偏好'));
+assert.ok(chineseSettingsHtml.includes('测试并连接'));
+storage.delete('tenma.language');
+storage.set('northstar.preferences', JSON.stringify({ startPage: 'home' }));
+console.log('PASS: settings categories, preference validation, startup pages, Chinese SSR and library overview SSR');
 
-const { ArtistsView, ArtistDetailView, SearchView } = await load('src/App.tsx', 'ArtistsView, ArtistDetailView, SearchView');
+const { BalancedGrid } = await load('src/BalancedGrid.tsx');
+const gridHtml = renderToStaticMarkup(React.createElement(BalancedGrid, { itemCount: 2 }, React.createElement('button', null, 'First'), React.createElement('button', null, 'Second')));
+assert.ok(gridHtml.includes('--balanced-card-width:160px'));
+assert.ok(!gridHtml.includes('grid-template-columns'), 'CSS must size columns from the container, not the record count');
+assert.ok(!gridHtml.includes('width:180px'));
+console.log('PASS: responsive grid delegates track sizing to container-based CSS');
+
+const { ArtistsView, ArtistDetailView, SearchView, AlbumDetailView, PlaylistDetailView } = await load('src/App.tsx', 'ArtistsView, ArtistDetailView, SearchView, AlbumDetailView, PlaylistDetailView');
 const fixtureSongs = [
   { id: 'fixture-1', title: 'Night Drive', artist: 'Mira Sol', album: 'After Hours', albumId: 'fixture-album', duration: 245 },
   { id: 'fixture-2', title: 'Soft Focus', artist: 'Mira Sol', album: 'After Hours', albumId: 'fixture-album', duration: 218 }
 ];
 const fixtureAlbums = [{ id: 'fixture-album', name: 'After Hours', artist: 'Mira Sol', year: 2024, songCount: 2, songs: fixtureSongs }];
-const { demoAlbums, demoSongs } = await load('src/demoData.ts');
-assert.deepEqual(demoAlbums, []);
-assert.deepEqual(demoSongs, []);
+const { emptyLocalAlbums, emptyLocalSongs, localAlbumsFromSongs, searchLocalLibrary } = await load('src/localLibrary.ts');
+assert.deepEqual(emptyLocalAlbums, []);
+assert.deepEqual(emptyLocalSongs, []);
+const groupedLocalAlbums = localAlbumsFromSongs(fixtureSongs);
+assert.equal(groupedLocalAlbums.length, 1);
+assert.equal(groupedLocalAlbums[0].songs.length, 2);
+assert.equal(groupedLocalAlbums[0].songCount, 2);
+const localResults = searchLocalLibrary(fixtureSongs, 'Night');
+assert.equal(localResults.songs.length, 1);
+assert.equal(localResults.albums.length, 1);
+assert.equal(localResults.artists.length, 1);
+assert.equal(localResults.songs[0].title, 'Night Drive');
+assert.equal(localResults.albums[0].songs.length, 2, 'Search must link to the full local album, not the filtered song subset');
+const moreLocalSongs = [{ ...fixtureSongs[0], id: 'a-song', title: 'First album song', album: 'Album A' }, ...fixtureSongs];
+const allLocalAlbums = localAlbumsFromSongs(moreLocalSongs);
+const searchedLocalAlbums = searchLocalLibrary(moreLocalSongs, 'Night').albums;
+assert.equal(searchedLocalAlbums[0].id, allLocalAlbums[1].id, 'Local album identity must not depend on search results or array position');
+assert.notEqual(searchedLocalAlbums[0].id, allLocalAlbums[0].id);
+assert.equal(searchedLocalAlbums[0].songs.length, 2);
+console.log('PASS: stable local album identities, full-album search results, empty library and track preservation');
 const artistsHtml = renderToStaticMarkup(React.createElement(ArtistsView, { albums: fixtureAlbums, onOpen: noop }));
 assert.equal((artistsHtml.match(/<button class="artist-item"/g) || []).length, 1);
 assert.ok(artistsHtml.includes('aria-label="View artist Mira Sol"'));
 const artist = { name: 'Mira Sol', albums: fixtureAlbums, songs: fixtureSongs };
 const artistHtml = renderToStaticMarkup(React.createElement(ArtistDetailView, { artist, loading: false, error: '', onBack: noop, onOpen: noop, onPlay: noop }));
-assert.ok(artistHtml.includes('Back to artist list'));
+assert.ok(artistHtml.includes('Back'));
 assert.ok(artistHtml.includes('Play tracks'));
 assert.ok(artistHtml.includes('After Hours'));
 assert.equal((artistHtml.match(/class="library-track-row"/g) || []).length, 2);
@@ -185,3 +290,72 @@ assert.ok(resultHtml.includes('Night Drive'));
 assert.ok(resultHtml.includes('artist-pills'));
 assert.ok(!resultHtml.includes('Recommended for you'));
 console.log('PASS: clickable artist cards, artist albums/tracks, search hero, random recommendations and search results SSR');
+
+const { shuffledItems, queueAroundTrack } = await load('src/playback.ts');
+const repeatedTrack = { ...fixtureSongs[0] };
+const shuffleInput = [fixtureSongs[0], fixtureSongs[1], repeatedTrack];
+const snapshot = [...shuffleInput];
+const randomized = shuffledItems(shuffleInput, () => 0);
+assert.deepEqual(shuffleInput, snapshot, 'Shuffling must not mutate the album/playlist order');
+assert.notDeepEqual(randomized, shuffleInput);
+assert.equal(randomized.length, shuffleInput.length);
+for (const song of shuffleInput) assert.ok(randomized.includes(song), 'Preserve every entry, including repeated IDs');
+assert.deepEqual(shuffledItems([]), []);
+assert.deepEqual(shuffledItems([fixtureSongs[0]]), [fixtureSongs[0]]);
+const randomQueue = queueAroundTrack(shuffleInput, fixtureSongs[1], true);
+assert.strictEqual(randomQueue.queue[0], fixtureSongs[1], 'Toggling shuffle must keep the current track object');
+assert.equal(randomQueue.index, 0);
+assert.equal(randomQueue.queue.length, 3);
+const orderedQueue = queueAroundTrack(shuffleInput, repeatedTrack, false);
+assert.deepEqual(orderedQueue.queue, shuffleInput);
+assert.equal(orderedQueue.index, 2, 'Restoring order must distinguish duplicate IDs');
+console.log('PASS: full-list shuffle, immutable source order, duplicates, empty/single queues and current-track preservation');
+
+const coverSongs = [{ ...fixtureSongs[0], coverArt: 'https://example.com/song-cover.png' }, { ...fixtureSongs[1] }];
+const albumForDetail = { ...fixtureAlbums[0], coverArt: 'https://example.com/album-cover.png', songs: coverSongs };
+const playlistForDetail = { id: 'fixture-playlist', name: 'Test playlist', owner: 'Listener', comment: '', public: false, songCount: 2, duration: 463, songs: coverSongs };
+const detailProps = { loading: false, error: '', onBack: noop, onPlay: noop, onPlayCollection: noop, onArtist: noop, onAlbum: noop, canOpenAlbum: () => true, playlists: [], showBitRate: true };
+const albumDetailHtml = renderToStaticMarkup(React.createElement(AlbumDetailView, { ...detailProps, album: albumForDetail }));
+const playlistDetailHtml = renderToStaticMarkup(React.createElement(PlaylistDetailView, { ...detailProps, playlist: playlistForDetail }));
+for (const html of [albumDetailHtml, playlistDetailHtml]) {
+  assert.equal((html.match(/class="detail-track"/g) || []).length, 2);
+  assert.equal((html.match(/class="(?:cover-fallback )?detail-track-cover[" ]/g) || []).length, 2);
+  assert.ok(html.includes('Shuffle play'));
+  assert.ok(html.includes('detail-track-heading'));
+  assert.ok(html.includes('src="https://example.com/song-cover.png"'));
+}
+assert.equal((albumDetailHtml.match(/src="https:\/\/example.com\/album-cover.png"/g) || []).length, 2, 'Missing track cover must fall back to album cover');
+assert.ok(playlistDetailHtml.includes('cover-fallback detail-track-cover'), 'No image must still have a thumbnail placeholder');
+assert.ok(playlistDetailHtml.includes('After Hours'));
+assert.ok(playlistDetailHtml.includes('detail-track-bit-rate'));
+assert.ok(playlistDetailHtml.includes('Song actions'));
+for (const [View, key, value] of [[AlbumDetailView, 'album', albumForDetail], [PlaylistDetailView, 'playlist', playlistForDetail]]) {
+  for (const overrides of [{ loading: true }, { [key]: { ...value, songs: [] } }, { error: 'Test error' }]) {
+    const html = renderToStaticMarkup(React.createElement(View, { ...detailProps, [key]: value, ...overrides }));
+    assert.equal((html.match(/disabled=""/g) || []).length, 2, 'Both collection actions must be disabled for loading, empty and error states');
+  }
+}
+assert.equal(translate('zh-CN', 'detail.shufflePlay'), '随机播放');
+assert.ok(albumDetailHtml.includes('aria-label="View artist Mira Sol"'));
+assert.ok(playlistDetailHtml.includes('aria-label="View album After Hours"'));
+let buttonDepth = 0;
+for (const [tag] of playlistDetailHtml.matchAll(/<\/?button\b[^>]*>/g)) {
+  buttonDepth += tag.startsWith('</') ? -1 : 1;
+  assert.ok(buttonDepth >= 0 && buttonDepth <= 1, 'Navigation controls must not be nested inside a play button');
+}
+assert.equal(buttonDepth, 0);
+
+const { albumForSong, groupArtists } = await load('src/musicNavigation.ts');
+const sameNameArtists = groupArtists([{ id: 'one', name: 'One', artist: 'Same name', artistId: 'artist-a' }, { id: 'two', name: 'Two', artist: 'Same name', artistId: 'artist-b' }]);
+assert.equal(sameNameArtists.length, 2, 'Same-named artists with different server IDs must remain separate');
+assert.deepEqual(sameNameArtists.map((artist) => artist.id), ['artist-a', 'artist-b']);
+const albumA = { id: 'same-name-a', name: 'Same title', artist: 'Artist A', songs: [{ ...fixtureSongs[0], localPath: 'C:\\Music\\AlbumA\\song.flac' }] };
+const albumB = { id: 'same-name-b', name: 'Same title', artist: 'Artist B' };
+assert.strictEqual(albumForSong({ ...fixtureSongs[0], albumId: albumB.id, album: albumA.name, artist: albumA.artist }, [albumA, albumB], true), albumB, 'Remote album IDs must win over ambiguous names');
+assert.equal(albumForSong({ ...fixtureSongs[0], albumId: 'not-indexed', album: 'Outside index' }, [], true).id, 'not-indexed', 'Unindexed remote albums remain loadable by ID');
+assert.strictEqual(albumForSong({ ...fixtureSongs[0], album: albumA.name, artist: albumA.artist }, [albumA, albumB], false), albumA);
+assert.equal(albumForSong({ ...fixtureSongs[0], album: albumA.name, artist: 'Unknown' }, [albumA, albumB], false), undefined, 'Do not guess between same-named albums');
+assert.strictEqual(albumForSong({ ...fixtureSongs[0], album: '', localPath: 'C:\\Music\\AlbumA\\song.flac' }, [albumA], false), albumA);
+assert.equal(albumForSong({ ...fixtureSongs[0], album: '' }, [], false), undefined);
+console.log('PASS: detail navigation controls, ID-first album lookup, local paths and ambiguous/missing album protection');
+console.log('PASS: album/playlist detail thumbnails, album-cover fallback, placeholders, shuffle buttons and disabled states');

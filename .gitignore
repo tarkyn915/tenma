@@ -24,3 +24,6 @@ Thumbs.db
 
 # Test / coverage
 coverage/
+
+# Icon source asset (large original; the processed transparent master is committed)
+assets/tenma-icon-source.jpg
