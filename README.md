@@ -23,10 +23,13 @@ Tenma Player brings your music into a simple desktop interface. Connect a Navidr
 
 - **A clean interface** — dark surfaces, rounded controls, responsive layouts, and two themes (**Midnight** and **Graphite**).
 - **Two sources, one library** — use a local folder as your library, or connect a Navidrome / Subsonic-compatible server. Local mode scans subfolders, reads tags, bitrate, and artwork, and remembers your folder between sessions.
-- **Search and discovery** — search your collection or refresh random recommendations.
-- **Now Playing** — large artwork, track details, playback controls, and lyrics. Timed lyrics support highlighting and seeking when supplied by your server.
+- **Search and discovery** — search your collection, or refresh random recommendations right on the home screen.
+- **Now Playing** — large auto-sizing artwork, track details, playback controls, and an **Up Next / Lyrics** tabbed panel. Timed lyrics highlight and follow along with a blurred, distance-faded context; plain-text lyrics stay centered and seekable. The cover scales to fit the window so everything stays on one screen.
 - **Everyday controls** — play, pause, seek, shuffle, repeat, and manage the queue. Right-click a track (or use its menu button) to add it to a playlist or jump to its artist and album. Scroll over the volume control to adjust it, or click its icon to mute and restore the previous volume.
+- **Playlists at hand** — a collapsible playlist section in the sidebar and a playlist grid on the home screen, each opening its playlist in one click.
+- **Lyrics built in** — local songs read embedded lyrics (USLT / ©lyr / FLAC `LYRICS` and `UNSYNCEDLYRICS`) and sibling `.lrc` files; when nothing is embedded, an online lyrics lookup (LRCLIB) fills the gap.
 - **Localized** — switch between English and Simplified Chinese in **Settings → General**.
+- **Reconnects for you** — remembered servers reconnect automatically on startup and when switching back from local mode.
 - **Runs in the background** — minimize to the system tray and reopen from its icon without quitting playback.
 - **In-app updates** — check for signed releases at startup or from **Settings → About**; download and install without finding an installer yourself.
 
@@ -41,7 +44,7 @@ Tenma Player plays music from your own library — a local folder or a Navidrome
 
 Custom ports and server subpaths are supported. Use your server's base address, such as `https://music.example.com` or `http://localhost:4533`. Local mode supports MP3, FLAC, WAV, OGG, OPUS, M4A, and AAC.
 
-Lyrics availability and timing depend on your server and music files. Some older servers only provide plain-text lyrics.
+Lyrics availability and timing depend on your server and music files. Some older servers only provide plain-text lyrics. When a track has no embedded or served lyrics, Tenma Player queries the free LRCLIB lyrics database.
 
 ### Updates
 
@@ -119,7 +122,6 @@ The release configuration is `src-tauri/tauri.release.conf.json`; `scripts/creat
 
 - Optional password saving uses local browser/WebView storage rather than the operating system's credential vault.
 - The audio quality preference is saved but is not yet applied to stream transcoding parameters.
-- Local mode reads embedded tags and `cover.*` / `folder.*` artwork; it does not download lyrics.
 - The current desktop release targets Windows x64. Other desktop platforms are not published yet.
 
 ## License

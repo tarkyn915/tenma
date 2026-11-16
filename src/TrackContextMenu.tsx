@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Album, ChevronRight, ListPlus, LoaderCircle, User } from 'lucide-react';
 import { useI18n } from './i18n';
 import type { Playlist, Song } from './types';
@@ -48,7 +49,10 @@ export function TrackContextMenu({ song, position, playlists, adding, onAddToPla
     };
   }, [onClose]);
   const go = (action?: () => void) => { onClose(); action?.(); };
-  return <div ref={root} className="track-context-menu" role="menu" aria-label={t('menu.moreActions')} style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+  // Render in a portal: fixed positioning inside the page content is hijacked by the
+  // animated .content-page ancestor (fill-mode both keeps a transform), which shifted
+  // the menu by the content origin instead of the mouse position.
+  return createPortal(<div ref={root} className="track-context-menu" role="menu" aria-label={t('menu.moreActions')} style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     <div className="track-context-title"><span>{song.title}</span><small>{song.artist}</small></div>
     <button type="button" role="menuitem" disabled={!onAddToPlaylist || !playlists.length || adding} onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
       {adding ? <LoaderCircle className="spin" size={16} /> : <ListPlus size={16} />}<span>{adding ? t('menu.adding') : t('menu.addToPlaylist')}</span><ChevronRight size={14} className={expanded ? 'expanded' : ''} />
@@ -58,5 +62,5 @@ export function TrackContextMenu({ song, position, playlists, adding, onAddToPla
     </div>}
     <button type="button" role="menuitem" disabled={!onArtist || !song.artist.trim()} onClick={() => go(() => onArtist?.(song.artist, song.artistId))}><User size={16} /><span>{t('menu.goToArtist')}</span></button>
     <button type="button" role="menuitem" disabled={!onAlbum || !song.album.trim()} onClick={() => go(() => onAlbum?.(song))}><Album size={16} /><span>{t('menu.goToAlbum')}</span></button>
-  </div>;
+  </div>, document.body);
 }

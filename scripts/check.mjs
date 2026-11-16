@@ -209,22 +209,23 @@ storage.set('northstar.preferences', JSON.stringify({ startPage: 'library' }));
 const libraryHtml = renderToStaticMarkup(React.createElement(App));
 assert.ok(libraryHtml.includes('library-stats'));
 assert.equal((libraryHtml.match(/class="library-stat"/g) || []).length, 4);
-assert.ok(libraryHtml.includes('Recommended for you'));
-assert.ok(libraryHtml.includes('No recommendations'));
+assert.ok(!libraryHtml.includes('Recommended for you'), 'The library page must not duplicate the home recommendations');
 assert.ok(libraryHtml.includes('No tracks yet'));
 assert.equal((libraryHtml.match(/class="library-track-row"/g) || []).length, 0);
 assert.ok(!libraryHtml.includes('library-tabs'));
 storage.set('northstar.preferences', JSON.stringify({ startPage: 'home' }));
 const homeHtml = renderToStaticMarkup(React.createElement(App));
-assert.ok(homeHtml.includes('Recently added'));
-assert.ok(homeHtml.includes('No albums yet'));
+assert.ok(homeHtml.includes('Recommended for you'));
+assert.ok(homeHtml.includes('No recommendations'));
 assert.ok(homeHtml.includes('Choose folder'));
 assert.ok(!homeHtml.includes('After Hours'));
+assert.ok(homeHtml.includes('Playlists') && homeHtml.includes('No playlists yet'), 'The sidebar must keep a playlists section with an empty hint');
 storage.set('tenma.language', 'zh-CN');
 const chineseHomeHtml = renderToStaticMarkup(React.createElement(App));
-assert.ok(chineseHomeHtml.includes('最近添加'));
+assert.ok(chineseHomeHtml.includes('为你推荐'));
 assert.ok(chineseHomeHtml.includes('本地模式'));
-assert.ok(chineseHomeHtml.includes('暂无专辑'));
+assert.ok(chineseHomeHtml.includes('暂无推荐'));
+assert.ok(chineseHomeHtml.includes('歌单'));
 assert.ok(!chineseHomeHtml.includes('Recently added'));
 const chineseSettingsHtml = renderToStaticMarkup(React.createElement(I18nContext.Provider, {
   value: { language: 'zh-CN', setLanguage: noop, t: (key, values) => translate('zh-CN', key, values) }
@@ -359,3 +360,52 @@ assert.strictEqual(albumForSong({ ...fixtureSongs[0], album: '', localPath: 'C:\
 assert.equal(albumForSong({ ...fixtureSongs[0], album: '' }, [], false), undefined);
 console.log('PASS: detail navigation controls, ID-first album lookup, local paths and ambiguous/missing album protection');
 console.log('PASS: album/playlist detail thumbnails, album-cover fallback, placeholders, shuffle buttons and disabled states');
+
+const { parseLyricsText } = await load('src/lyrics.ts');
+const syncedLyrics = parseLyricsText('[ti:Song title]\n[ar:Artist]\n[00:02.00]Second\n[00:01.50]First\n[00:04.00][00:05.00]Repeated');
+assert.equal(syncedLyrics.synced, true, 'Timestamped lyrics must be marked as synced');
+assert.deepEqual(syncedLyrics.lines.map((line) => line.start), [1.5, 2, 4, 5], 'Synced lines must be sorted by time');
+assert.equal(syncedLyrics.lines[0].text, 'First');
+assert.equal(syncedLyrics.lines.filter((line) => line.text === 'Repeated').length, 2, 'Multiple timestamps on one line must produce separate entries');
+assert.ok(!syncedLyrics.lines.some((line) => line.text.includes('ti:') || line.text.includes('ar:')), 'LRC metadata tags must be skipped');
+const plainLyrics = parseLyricsText('First plain line\r\nSecond plain line\n\nThird line');
+assert.equal(plainLyrics.synced, false, 'Plain text lyrics are not synced');
+assert.deepEqual(plainLyrics.lines.map((line) => line.text), ['First plain line', 'Second plain line', 'Third line']);
+assert.deepEqual(parseLyricsText('').lines, [], 'Empty lyrics produce no lines');
+assert.deepEqual(parseLyricsText('[offset:500]').lines, [], 'Metadata-only lyrics produce no lines');
+console.log('PASS: embedded/sidecar lyrics parsing with LRC timestamps, metadata filtering and plain text');
+
+const { fetchOnlineLyrics } = await load('src/onlineLyrics.ts');
+let lyricRequests = [];
+globalThis.fetch = async (url) => {
+  const address = String(url);
+  lyricRequests.push(address);
+  if (address.includes('/api/get?')) {
+    return { ok: true, status: 200, json: async () => ({ trackName: 'Song', artistName: 'Artist', duration: 200, plainLyrics: 'Plain words', syncedLyrics: '[00:01.00]Synced words' }) };
+  }
+  return { ok: true, status: 200, json: async () => [] };
+};
+const exact = await fetchOnlineLyrics({ title: 'Song', artist: 'Artist', album: 'Album', duration: 200 });
+assert.equal(exact?.synced, true, 'Exact online match must prefer synced lyrics');
+assert.equal(exact?.lines[0].text, 'Synced words');
+assert.equal(lyricRequests.length, 1, 'An exact match must not trigger a search request');
+assert.ok(lyricRequests[0].includes('duration=200') && lyricRequests[0].includes('track_name=Song'));
+lyricRequests = [];
+globalThis.fetch = async (url) => {
+  const address = String(url);
+  lyricRequests.push(address);
+  if (address.includes('/api/get?')) return { ok: false, status: 404, json: async () => null };
+  return { ok: true, status: 200, json: async () => [
+    { trackName: 'Song', artistName: 'Artist', duration: 400, plainLyrics: 'Wrong length' },
+    { trackName: 'Song', artistName: 'Artist', duration: 199, syncedLyrics: '[00:02.00]Best match' },
+    { trackName: 'Song', artistName: 'Artist', instrumental: true }
+  ] };
+};
+const searched = await fetchOnlineLyrics({ title: 'Song', artist: 'Artist', album: '', duration: 200 });
+assert.equal(lyricRequests.length === 2 && lyricRequests[1].includes('/api/search?'), true, 'A 404 on the exact lookup must fall back to search');
+assert.equal(searched?.lines[0].text, 'Best match', 'Search must prefer synced lyrics with a matching duration');
+globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => null });
+assert.equal(await fetchOnlineLyrics({ title: 'Song', artist: 'Artist' }), null, 'No online match must return null');
+globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => null });
+await assert.rejects(() => fetchOnlineLyrics({ title: 'Song', artist: 'Artist' }), /500/, 'Service errors must surface instead of showing as missing lyrics');
+console.log('PASS: online lyrics exact match, search fallback with duration scoring, empty results and error propagation');

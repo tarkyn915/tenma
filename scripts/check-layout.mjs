@@ -35,7 +35,7 @@ for (const count of [0, 1, 2, 7, 8, 9, 24, 25]) {
   cases.push({ kind: 'albums', count, component: React.createElement(AlbumsView, { albums, error: '', onOpen: noop }) });
   cases.push({ kind: 'artists', count, component: React.createElement(ArtistsView, { albums, onOpen: noop }) });
 }
-cases.push({ kind: 'home', count: 8, component: React.createElement(HomeView, { albums: albumFixtures(8), mode: 'server', localFolder: '', loading: false, onOpen: noop, onConnect: noop }) });
+cases.push({ kind: 'home', count: 9, component: React.createElement(HomeView, { randomSongs: Array.from({ length: 9 }, (_, index) => ({ id: `layout-song-${index}`, title: `Track ${index + 1}`, artist: `Artist ${index + 1}`, album: `Album ${index + 1}`, coverArt: artwork, duration: 200 })), randomLoading: false, randomError: '', onRefreshRandom: noop, onPlay: noop, playlists: [{ id: 'layout-playlist-1', name: 'Layout playlist', comment: '', owner: 'Listener', public: false, songCount: 12, duration: 400, coverArt: artwork }], onOpenPlaylist: noop, mode: 'server', localFolder: '', onConnect: noop }) });
 const playlists = [0, 1].map((index) => ({ id: `layout-playlist-${index}`, name: `Playlist ${index + 1}`, comment: '', owner: 'Listener', public: false, songCount: 20, duration: 400, coverArt: artwork }));
 cases.push({ kind: 'playlists', count: 2, component: React.createElement(PlaylistsView, { playlists, onOpen: noop }) });
 const markup = cases.map(({ kind, count, component }) => `<div class="layout-case" data-kind="${kind}" data-count="${count}">${renderToStaticMarkup(component)}</div>`).join('');
@@ -49,6 +49,14 @@ const checks = String.raw`
       surface.style.width = width + 'px';
       const kind = surface.dataset.kind;
       const count = Number(surface.dataset.count);
+      if (kind === 'home') {
+        const cards = surface.querySelectorAll('.recommend-card');
+        expect(cards.length === count, 'home: recommendation cards missing');
+        expect(surface.querySelectorAll('.home-playlist-card').length === 1, 'home: playlist cards missing');
+        expect(cards.length === 0 || cards[0].getBoundingClientRect().width > 0, 'home: recommendation cards must be visible');
+        results.push({ kind, count, width, columns: 0, cardWidth: 0 });
+        continue;
+      }
       const grid = surface.querySelector('.balanced-grid');
       if (!grid) { expect(count === 0, kind + ': missing grid'); continue; }
       const prefix = kind + '/' + count + '@' + width + ': ';
@@ -106,7 +114,7 @@ try {
     const artifacts = resolve(process.env.TENMA_LAYOUT_ARTIFACTS);
     await mkdir(artifacts, { recursive: true });
     const sidebar = '<aside class="sidebar"><div class="server-switcher"><button class="server-switcher-button"><span class="status-dot online"></span><strong>Layout test fixtures</strong></button></div><nav class="sidebar-navigation"><button class="nav-item active">Library</button></nav></aside>';
-    for (const [kind, count] of [['home', 8], ['albums', 25], ['playlists', 2], ['artists', 9]]) {
+    for (const [kind, count] of [['home', 9], ['albums', 25], ['playlists', 2], ['artists', 9]]) {
       const fixture = cases.find((item) => item.kind === kind && item.count === count);
       const visual = join(directory, `${kind}.html`);
       await writeFile(visual, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${stylesheet}\n.content-page { animation: none; }</style><body><div class="app-shell theme-gray">${sidebar}<main class="main-content"><header class="topbar"><span class="topbar-brand">Tenma Player — layout test</span></header><div class="content-scroll"><div class="content-page">${renderToStaticMarkup(fixture.component)}</div></div></main></div></body></html>`, 'utf8');

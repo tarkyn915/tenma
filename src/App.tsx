@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event';
-import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, MoreVertical, Music2, Pause, Play, Plus, Repeat, Search, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, VolumeX, X } from 'lucide-react';
+import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, MoreVertical, Music2, Pause, Play, Plus, Repeat, Search, Server, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { NavidromeApi } from './api';
 import { emptyLocalAlbums, emptyLocalPlaylists, emptyLocalSongs, localAlbumsFromSongs, pickLocalLibraryFolder, scanLocalLibrary, searchLocalLibrary } from './localLibrary';
 import type { Album, AppMode, ConnectionSettings, Playlist, PlayerTrack, SearchResults, Song } from './types';
@@ -65,7 +65,7 @@ function WindowControls({ onClose }: { onClose: () => Promise<void> }) {
   </div>;
 }
 
-function sampleSongs(songs: Song[], size = 12) {
+function sampleSongs(songs: Song[], size = 9) {
   return shuffledItems(songs).slice(0, size);
 }
 
@@ -115,8 +115,13 @@ function AppContent() {
   }, [navigation.index]);
   const [showQueue, setShowQueue] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
+  const [nowPlayingClosing, setNowPlayingClosing] = useState(false);
+  const closeNowPlaying = () => {
+    if (nowPlayingClosing) return;
+    setNowPlayingClosing(true);
+    window.setTimeout(() => { setNowPlayingOpen(false); setNowPlayingClosing(false); }, 200);
+  };
   const [albums, setAlbums] = useState<Album[]>(emptyLocalAlbums);
-  const [recentAlbums, setRecentAlbums] = useState<Album[]>(emptyLocalAlbums);
   const [albumsError, setAlbumsError] = useState<MessageContent>('');
   const [randomSongs, setRandomSongs] = useState<Song[]>(() => sampleSongs(emptyLocalSongs));
   const [randomLoading, setRandomLoading] = useState(false);
@@ -142,7 +147,7 @@ function AppContent() {
   const [libraryHasNext, setLibraryHasNext] = useState(false);
   const librarySongRequest = useRef(0);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'error' | 'success'; text: MessageContent } | null>(null);
+  const [message, setMessage] = useState<{ type: 'error' | 'success' | 'info'; text: MessageContent } | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle');
   const [updateProgress, setUpdateProgress] = useState(0);
@@ -312,29 +317,45 @@ function AppContent() {
     audio.volume = volume;
   }, [volume]);
 
-  const connect = async (event: React.FormEvent) => {
-    event.preventDefault(); setLoading(true); setMessage(null);
+  const connect = (event: React.FormEvent) => {
+    event.preventDefault();
+    void establishConnection(settings, password);
+  };
+  // Switching back to the remote source (sidebar menu or settings) reconnects
+  // automatically with the remembered credentials instead of asking to sign in again.
+  const restoreRemoteConnection = () => {
+    if (mode === 'server' || !settings.server || !settings.username) return;
+    if (!password) { nav('settings'); return; }
+    void establishConnection(settings, password);
+  };
+  // Reconnect automatically on startup when credentials are remembered, so the
+  // user does not have to sign in again after restarting the app.
+  useEffect(() => {
+    if (settings.server && settings.username && password) void establishConnection(settings, password);
+    // Intentionally runs once on mount.
+  }, []);
+  const establishConnection = async (credentials: ConnectionSettings, secret: string) => {
+    setLoading(true); setMessage(null);
     const session = ++sessionRequest.current;
     localRequest.current++; setLocalLoading(false);
-    const nextApi = new NavidromeApi(settings, password);
+    const nextApi = new NavidromeApi(credentials, secret);
     try {
       await nextApi.ping();
       if (session !== sessionRequest.current) return;
-      const [recent, all, lists, random] = await Promise.all([
-        nextApi.recentAlbums().then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Album[], error: errorContent(error, 'error.loadRecentAlbums') })),
+      const [all, lists, random] = await Promise.all([
         nextApi.allAlbums().then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Album[], error: errorContent(error, 'error.loadAllAlbums') })),
         nextApi.playlists().then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Playlist[], error: errorContent(error, 'error.loadPlaylists') })),
-        nextApi.randomSongs().then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Song[], error: errorContent(error, 'error.loadRandomSongs') }))
+        nextApi.randomSongs(9).then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Song[], error: errorContent(error, 'error.loadRandomSongs') }))
       ]);
       if (all.value.length) nextApi.setAlbumIndex(all.value);
       const songs = await nextApi.songsPage(0, LIBRARY_PAGE_SIZE, all.value).then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Song[], error: errorContent(error, 'error.songListUnavailable') }));
       if (session !== sessionRequest.current) return;
-      const saved = { ...settings, server: nextApi.base, serverName: serverLabel(settings) };
+      const saved = { ...credentials, server: nextApi.base, serverName: serverLabel(credentials) };
       playlistRequest.current++; albumRequest.current++; artistRequest.current++; randomRequest.current++; setPlaylistsLoading(false); setRandomLoading(false);
       audioRef.current?.pause(); originalQueue.current = []; setQueue([]); setCurrentIndex(-1); setCurrentTime(0); setDuration(0);
       setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setSearchResults({ songs: [], albums: [], artists: [] });
       resetDetailHistory();
-      setApi(nextApi); setMode('server'); setAlbums(all.value); setRecentAlbums(recent.value); setAlbumsError(all.error);
+      setApi(nextApi); setMode('server'); setAlbums(all.value); setAlbumsError(all.error);
       const indexedSongs = indexedSongCount(all.value);
       const estimatedPages = indexedSongs > 0 ? Math.max(1, Math.ceil(indexedSongs / LIBRARY_PAGE_SIZE)) : 1;
       const initialPageCount = songs.value.length === LIBRARY_PAGE_SIZE ? Math.max(2, estimatedPages) : 1;
@@ -345,11 +366,10 @@ function AppContent() {
       setIsConnected(true); setConnectedSettings(saved); setSettings(saved);
       storageSet('northstar.server', saved.server); storageSet('northstar.username', saved.username); storageSet('northstar.serverName', saved.serverName);
       storageSet('northstar.rememberPassword', String(rememberPassword));
-      if (rememberPassword) storageSet('northstar.password', password); else storageRemove('northstar.password');
+      if (rememberPassword) storageSet('northstar.password', secret); else storageRemove('northstar.password');
       const namedError = (label: TranslationKey, error: MessageContent): MessageContent => ({ key: 'error.named', values: { label: { key: label }, error } });
       const errors = [
         all.error && namedError('error.allAlbumsLabel', all.error),
-        recent.error && namedError('error.recentAlbumsLabel', recent.error),
         lists.error && namedError('error.playlistsLabel', lists.error),
         random.error && namedError('error.recommendationsLabel', random.error),
         songs.error && namedError('error.songsLabel', songs.error)
@@ -364,7 +384,7 @@ function AppContent() {
   const applyLocalSongs = (songs: Song[]) => {
     const allAlbums = localAlbumsFromSongs(songs);
     const pageCount = Math.max(1, Math.ceil(songs.length / LIBRARY_PAGE_SIZE));
-    setAlbums(allAlbums); setRecentAlbums(allAlbums.slice(0, 24)); setAlbumsError('');
+    setAlbums(allAlbums); setAlbumsError('');
     setLibrarySongs(songs.slice(0, LIBRARY_PAGE_SIZE)); setLibrarySongPage(0); setLibraryKnownPageCount(pageCount); setLibraryHasNext(pageCount > 1); setLibrarySongError('');
     setRandomSongs(sampleSongs(songs)); setRandomError(''); setRandomLoading(false); setPlaylists(emptyLocalPlaylists); setPlaylistsError(''); setPlaylistsLoading(false);
   };
@@ -449,8 +469,21 @@ function AppContent() {
     if (!api || playlistSongAdding) return;
     setPlaylistSongAdding(song.id);
     try {
+      const known = playlists.find((playlist) => playlist.id === playlistId);
+      let name = known?.name || t('common.playlists');
+      let existing = known?.songs;
+      if (!existing) {
+        try {
+          const detail = await api.playlist(playlistId);
+          name = detail.name || name;
+          existing = detail.songs;
+        } catch { /* duplicate check is best effort; never block the add on it */ }
+      }
+      if (existing?.some((entry) => entry.id === song.id)) {
+        setMessage({ type: 'info', text: { key: 'message.alreadyInPlaylist', values: { name } } });
+        return;
+      }
       await api.addToPlaylist(playlistId, song.id);
-      const name = playlists.find((playlist) => playlist.id === playlistId)?.name || t('common.playlists');
       setMessage({ type: 'success', text: { key: 'message.addedToPlaylist', values: { name } } });
       void refreshPlaylists();
       if (selectedPlaylist?.id === playlistId) void api.playlist(playlistId).then((detail) => setSelectedPlaylist((current) => current?.id === playlistId ? detail : current)).catch(() => {});
@@ -492,7 +525,7 @@ function AppContent() {
     const session = sessionRequest.current;
     setRandomLoading(true); setRandomError('');
     try {
-      const songs = api ? await api.randomSongs() : sampleSongs(localSongs);
+      const songs = api ? await api.randomSongs(9) : sampleSongs(localSongs);
       if (request === randomRequest.current && session === sessionRequest.current) setRandomSongs(songs);
     } catch (error) {
       if (request === randomRequest.current && session === sessionRequest.current) {
@@ -566,8 +599,7 @@ function AppContent() {
   };
   const previous = () => { if (audioRef.current && audioRef.current.currentTime > 3) audioRef.current.currentTime = 0; else if (queue.length) setCurrentIndex((currentIndex - 1 + queue.length) % queue.length); };
 
-  const primaryNav = [{ id: 'home' as const, label: t('nav.home'), icon: Home }, { id: 'search' as const, label: t('nav.search'), icon: Search }];
-  const libraryNav = [{ id: 'library' as const, label: t('nav.library'), icon: Library }, { id: 'artists' as const, label: t('common.artists'), icon: Users }, { id: 'albums' as const, label: t('common.albums'), icon: AlbumIcon }, { id: 'playlists' as const, label: t('common.playlists'), icon: ListMusic }];
+  const primaryNav = [{ id: 'home' as const, label: t('nav.home'), icon: Home }, { id: 'library' as const, label: t('nav.library'), icon: Library }, { id: 'artists' as const, label: t('common.artists'), icon: Users }, { id: 'albums' as const, label: t('common.albums'), icon: AlbumIcon }];
   const currentServerName = mode === 'local' ? t('server.localMode') : serverLabel(connectedSettings || settings);
   const resetDetailHistory = () => {
     detailHistory.current.clear(); historyScroll.current.clear();
@@ -610,8 +642,18 @@ function AppContent() {
     setMobileNav(false); setServerMenuOpen(false);
   };
   const openConnectionSettings = () => { setConnectionViewKey((key) => key + 1); nav('settings'); };
-  const renderNavItem = ({ id, label, icon: Icon }: typeof primaryNav[number] | typeof libraryNav[number]) => {
-    const active = id === 'search' ? page === 'library' && focusLibrarySearch : page === id || (id === 'albums' && page === 'album') || (id === 'artists' && page === 'artist') || (id === 'playlists' && page === 'playlist');
+  const [playlistsCollapsed, setPlaylistsCollapsed] = useState(() => storageGet('tenma.playlistsCollapsed') === '1');
+  const togglePlaylistsCollapsed = () => {
+    const next = !playlistsCollapsed;
+    setPlaylistsCollapsed(next);
+    storageSet('tenma.playlistsCollapsed', next ? '1' : '');
+  };
+  const openPlaylistFromSidebar = (playlist: Playlist) => {
+    setMobileNav(false);
+    void openPlaylist(playlist);
+  };
+  const renderNavItem = ({ id, label, icon: Icon }: typeof primaryNav[number]) => {
+    const active = page === id || (id === 'albums' && page === 'album') || (id === 'artists' && page === 'artist');
     return <button key={id} className={cn('nav-item', active && 'active')} aria-current={active ? 'page' : undefined} onClick={() => nav(id)}><Icon size={18} /><span>{label}</span></button>;
   };
 
@@ -624,13 +666,25 @@ function AppContent() {
           <p>{t('server.musicServer')}</p>
           {isConnected && <button className="server-option current" onClick={() => setServerMenuOpen(false)}><span className="status-dot online" /><span>{currentServerName}<small>{t('server.currentConnection')}</small></span><Check size={15} /></button>}
           <button className={cn('server-option', mode === 'local' && 'current')} onClick={() => { if (mode !== 'local') useLocalMode(); nav('home'); }}><Disc3 size={17} /><span>{t('server.localMode')}<small>{localFolder || t('server.localHint')}</small></span>{mode === 'local' && <Check size={15} />}</button>
+          {mode === 'local' && settings.server && <button className="server-option" onClick={() => { setServerMenuOpen(false); restoreRemoteConnection(); }}><Server size={17} /><span>{t('server.restoreRemote', { name: settings.serverName || serverLabel(settings) })}</span></button>}
           <button className="server-option server-add" onClick={openConnectionSettings}><Plus size={17} /><span>{t('server.addSwitch')}</span></button>
           <small className="server-menu-note">{t('server.singleServerNote')}</small>
         </div>}
       </div>
       <nav className="sidebar-navigation" aria-label={t('nav.main')}>
         <div className="nav-group">{primaryNav.map(renderNavItem)}</div>
-        <div className="nav-group"><p className="nav-group-label">{t('nav.library')}</p>{libraryNav.map(renderNavItem)}</div>
+        <div className="nav-group playlists-nav">
+          <div className="playlists-nav-heading">
+            <button className="playlists-nav-title" onClick={() => { setMobileNav(false); nav('playlists'); }}>{t('common.playlists')}</button>
+            <button className="icon-button playlists-nav-toggle" aria-label={t('nav.togglePlaylists')} aria-expanded={!playlistsCollapsed} onClick={togglePlaylistsCollapsed}><ChevronDown size={15} className={cn('playlists-toggle-icon', !playlistsCollapsed && 'open')} /></button>
+          </div>
+          {playlists.length ? (!playlistsCollapsed && <div className="playlists-nav-list">
+            {playlists.map((playlist) => <button key={playlist.id} className={cn('playlist-nav-item', page === 'playlist' && selectedPlaylist?.id === playlist.id && 'active')} onClick={() => openPlaylistFromSidebar(playlist)}>
+              <Cover src={playlist.coverArt} alt={playlist.name} className="playlist-nav-cover" />
+              <span className="playlist-nav-copy"><strong>{playlist.name}</strong><small>{t('count.tracks', { count: playlist.songCount || 0 })}</small></span>
+            </button>)}
+          </div>) : <p className="playlists-nav-empty">{t('playlists.empty')}</p>}
+        </div>
       </nav>
       <div className="sidebar-footer"><button className={cn('nav-item', page === 'settings' && 'active')} aria-current={page === 'settings' ? 'page' : undefined} onClick={() => nav('settings')}><Settings size={18} /><span>{t('nav.settings')}</span></button></div>
     </aside>
@@ -647,26 +701,36 @@ function AppContent() {
       <div className="content-scroll" ref={contentScrollRef}>
         {availableUpdate && <section className="update-banner" aria-live="polite"><div className="update-banner-copy"><strong>{t('update.bannerTitle', { version: availableUpdate.version })}</strong><span>{updateStatus === 'downloading' ? t('update.downloading', { progress: updateProgress }) : updateError ? resolveMessage(updateError, t) : t('update.ready')}</span></div>{updateStatus === 'downloading' ? <span className="update-progress" aria-label={t('update.progress', { progress: updateProgress })}><span style={{ width: `${updateProgress}%` }} /></span> : <><button className="primary-button compact" onClick={installUpdate}>{t('update.now')}</button><button className="update-dismiss" aria-label={t('update.remindLater')} onClick={() => { void availableUpdate.close(); setAvailableUpdate(null); }}>{t('update.later')}</button></>}</section>}
         {message && <div className="toast-spacer" />}
-        {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : '!'} {resolveMessage(message.text, t)}<button aria-label={t('common.dismissNotification')} onClick={() => setMessage(null)}><X size={15} /></button></div>}
+        {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : message.type === 'info' ? 'ℹ' : '!'} {resolveMessage(message.text, t)}<button aria-label={t('common.dismissNotification')} onClick={() => setMessage(null)}><X size={15} /></button></div>}
         <div key={page} className="content-page">
-          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} mode={mode} useLocal={() => useLocalMode()} disconnect={() => useLocalMode()} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView albums={recentAlbums.slice(0, 8)} mode={mode} localFolder={localFolder} loading={mode === 'local' ? localLoading : loading} onOpen={openAlbum} onConnect={() => nav('settings')} />}
+          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} mode={mode} useLocal={() => useLocalMode()} restoreRemote={restoreRemoteConnection} disconnect={() => useLocalMode()} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onPlay={playSong} playlists={playlists} onOpenPlaylist={(playlist) => { setMobileNav(false); void openPlaylist(playlist); }} mode={mode} localFolder={localFolder} onConnect={() => nav('settings')} />}
         </div>
       </div>
     </main>
     <audio ref={audioRef} onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setMessage({ type: 'error', text: { key: 'player.failed' } }); }} onEnded={() => { setPlaying(false); if (preferences.autoNext) next(); }} />
-    {!nowPlayingOpen && <Player track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} showQueue={showQueue} onQueue={() => setShowQueue(!showQueue)} onOpenNowPlaying={() => { setShowQueue(false); setNowPlayingOpen(true); }} />}
-    {nowPlayingOpen && <NowPlayingView track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} api={api} onClose={() => setNowPlayingOpen(false)} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} onQueue={() => setShowQueue(!showQueue)} />}
+    <Player track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} showQueue={showQueue} onQueue={() => setShowQueue(!showQueue)} onOpenNowPlaying={() => { setShowQueue(false); setNowPlayingOpen(true); }} />
+    {nowPlayingOpen && <NowPlayingView track={currentTrack} queue={queue} queueIndex={currentIndex} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} closing={nowPlayingClosing} api={api} onClose={closeNowPlaying} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} onQueueSelect={(index) => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} onArtist={(name, artistId) => { closeNowPlaying(); openArtist(name, artistId); }} onAlbum={(song) => { closeNowPlaying(); openSongAlbum(song); }} canOpenAlbum={(song) => !!linkedAlbum(song)} />}
     {showQueue && <section className="queue-panel" aria-label={t('player.queue')}><div className="group-title"><h2>{t('player.queue')}</h2><button className="icon-button" aria-label={t('player.closeQueue')} onClick={() => setShowQueue(false)}><X size={18} /></button></div>{queue.length ? queue.map((song, index) => <button key={`${song.id}-${index}`} className={cn('queue-track', index === currentIndex && 'control-active')} onClick={() => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }}><span>{song.title}<small>{song.artist}</small></span><span className="song-duration">{formatTime(song.duration)}</span></button>) : <p>{t('player.emptyQueue')}</p>}</section>}
 
   </div>;
 }
 
-function HomeView({ albums, mode, localFolder, loading, onOpen, onConnect }: { albums: Album[]; mode: AppMode; localFolder: string; loading: boolean; onOpen: (album: Album) => void; onConnect: () => void }) {
+function HomeView({ randomSongs, randomLoading, randomError, onRefreshRandom, onPlay, playlists, onOpenPlaylist, mode, localFolder, onConnect }: { randomSongs: Song[]; randomLoading: boolean; randomError: string; onRefreshRandom: () => void; onPlay: (song: Song, list?: Song[]) => void; playlists: Playlist[]; onOpenPlaylist: (playlist: Playlist) => void; mode: AppMode; localFolder: string; onConnect: () => void }) {
   const { t } = useI18n();
   return <section className="home-view">
-    <div className="section-heading"><h1>{t('home.recentlyAdded')}</h1><span>{t('count.albums', { count: albums.length })}</span></div>
+    <div className="page-heading"><h1>{t('nav.home')}</h1><p>{t('library.description')}</p></div>
     {mode === 'local' && !localFolder && <p className="connection-hint">{t('home.localHint')} <button onClick={onConnect}>{t('home.chooseFolder')} <ChevronRight size={13} /></button></p>}
-    {loading ? <div className="loading-state"><LoaderCircle className="spin" size={23} />{t('common.loading')}</div> : albums.length ? <BalancedGrid className="album-grid" itemCount={albums.length}>{albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} />)}</BalancedGrid> : <EmptyPage title={t('home.noAlbums')} description={t('home.noAlbumsDescription')} icon={<AlbumIcon size={25} />} />}
+    <RecommendCards songs={randomSongs.slice(0, 9)} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} />
+    {playlists.length > 0 && <>
+      <div className="section-heading home-playlists-heading"><h2>{t('common.playlists')}</h2><span>{t('count.playlists', { count: playlists.length })}</span></div>
+      <div className="home-playlist-grid">
+        {playlists.map((playlist) => <button key={playlist.id} className="home-playlist-card" onClick={() => onOpenPlaylist(playlist)}>
+          <Cover src={playlist.coverArt} alt={playlist.name} className="home-playlist-cover" />
+          <strong>{playlist.name}</strong>
+          <small>{playlist.owner || t('detail.currentAccount')}{playlist.songCount ? ` · ${t('count.tracks', { count: playlist.songCount })}` : ''}</small>
+        </button>)}
+      </div>
+    </>}
   </section>;
 }
 
@@ -741,7 +805,7 @@ function SearchResultsCards({ results, loading, onArtist, onOpen, onPlay }: { re
   return <>{results.songs.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.tracks')}</h2><span>{results.songs.length}</span></div><div className="search-result-grid">{results.songs.map((song) => <button className="search-result-card" key={song.id} onClick={() => onPlay(song, results.songs)}><Cover src={song.coverArt} alt={song.album} /><span className="recommend-copy"><strong>{song.title}</strong><small>{song.artist} · {song.album}</small></span><Play size={15} /></button>)}</div></div>}{results.albums.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.albums')}</h2><span>{results.albums.length}</span></div><BalancedGrid className="album-grid search-grid" itemCount={results.albums.length}>{results.albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} />)}</BalancedGrid></div>}{results.artists.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.artists')}</h2><span>{results.artists.length}</span></div><div className="artist-pills">{results.artists.map((artist) => <button key={artist.id} onClick={() => onArtist(artist.name, artist.id)}><span className="artist-avatar">{artist.name[0]}</span>{artist.name}</button>)}</div></div>}{!results.songs.length && !results.albums.length && !results.artists.length && <EmptyPage title={t('search.noResults')} description={t('search.noResultsDescription')} icon={<Search size={25} />} />}</>;
 }
 
-function LibraryView({ albums, albumsError, playlists, playlistsError, songs, songPage, songLoading, songError, hasNext, knownPageCount, query, onQuery, results, searchLoading, randomSongs, randomLoading, randomError, onRefreshRandom, onArtist, onOpen, onPlay, onPage, onAddToPlaylist, addingSongId }: { albums: Album[]; albumsError: string; playlists: Playlist[]; playlistsError: string; songs: Song[]; songPage: number; songLoading: boolean; songError: string; hasNext: boolean; knownPageCount: number; query: string; onQuery: (query: string) => void; results: SearchResults; searchLoading: boolean; randomSongs: Song[]; randomLoading: boolean; randomError: string; onRefreshRandom: () => void; onArtist: (name: string, artistId?: string) => void; onOpen: (album: Album) => void; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void; onPage: (page: number) => void; onAddToPlaylist?: (playlistId: string, song: Song) => void; addingSongId?: string } & DetailNavigation) {
+function LibraryView({ albums, albumsError, playlists, playlistsError, songs, songPage, songLoading, songError, hasNext, knownPageCount, query, onQuery, results, searchLoading, onArtist, onOpen, onPlay, onPage, onAddToPlaylist, addingSongId }: { albums: Album[]; albumsError: string; playlists: Playlist[]; playlistsError: string; songs: Song[]; songPage: number; songLoading: boolean; songError: string; hasNext: boolean; knownPageCount: number; query: string; onQuery: (query: string) => void; results: SearchResults; searchLoading: boolean; onArtist: (name: string, artistId?: string) => void; onOpen: (album: Album) => void; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void; onPage: (page: number) => void; onAddToPlaylist?: (playlistId: string, song: Song) => void; addingSongId?: string } & DetailNavigation) {
   const { t, language } = useI18n();
   const openSongAlbum = (song: Song) => {
     const album = albumForSong(song, [...albums, ...results.albums], false);
@@ -754,7 +818,7 @@ function LibraryView({ albums, albumsError, playlists, playlistsError, songs, so
     <div className="library-search"><Search size={21} /><input className="library-search-input" aria-label={t('search.input')} placeholder={t('search.placeholder')} value={query} onChange={(event) => onQuery(event.target.value)} />{query && <button className="icon-button" aria-label={t('search.clear')} onClick={() => onQuery('')}><X size={18} /></button>}</div>
     <div className="library-stats">{stats.map(({ label, count, icon: Icon }) => <div className="library-stat" key={label}><Icon size={21} /><span>{label}<strong>{count === null ? '—' : count.toLocaleString(language)}</strong></span></div>)}</div>
     {albumsError && <p className="inline-error">{t('albums.loadFailed', { error: albumsError })}</p>}{playlistsError && <p className="inline-error">{playlistsError}</p>}
-    {query.trim() ? <><div className="section-heading"><h2>{t('search.results')}</h2></div><SearchResultsCards results={results} loading={searchLoading} onArtist={onArtist} onOpen={onOpen} onPlay={onPlay} /></> : <><RecommendCards songs={randomSongs} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} /><div className="section-heading library-songs-heading"><h2>{t('library.allTracks')}</h2><span>{t('library.page', { page: songPage + 1 })}</span></div>{songError && <p className="inline-error">{songError} {t('library.songErrorSuffix')}</p>}{songLoading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('library.loadingTracks')}</div> : songs.length ? <TrackTable songs={songs} onPlay={onPlay} playlists={playlists} onAddToPlaylist={onAddToPlaylist} addingSongId={addingSongId} onArtist={onArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!albumForSong(song, [...albums, ...results.albums], false)} /> : <EmptyPage title={t('library.noTracks')} description={t('library.noTracksDescription')} icon={<Music2 size={25} />} />}<Pagination page={songPage} pageCount={knownPageCount} hasNext={!songLoading && hasNext} onPage={onPage} /></>}
+    {query.trim() ? <><div className="section-heading"><h2>{t('search.results')}</h2></div><SearchResultsCards results={results} loading={searchLoading} onArtist={onArtist} onOpen={onOpen} onPlay={onPlay} /></> : <><div className="section-heading library-songs-heading"><h2>{t('library.allTracks')}</h2><span>{t('library.page', { page: songPage + 1 })}</span></div>{songError && <p className="inline-error">{songError} {t('library.songErrorSuffix')}</p>}{songLoading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('library.loadingTracks')}</div> : songs.length ? <TrackTable songs={songs} onPlay={onPlay} playlists={playlists} onAddToPlaylist={onAddToPlaylist} addingSongId={addingSongId} onArtist={onArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!albumForSong(song, [...albums, ...results.albums], false)} /> : <EmptyPage title={t('library.noTracks')} description={t('library.noTracksDescription')} icon={<Music2 size={25} />} />}<Pagination page={songPage} pageCount={knownPageCount} hasNext={!songLoading && hasNext} onPage={onPage} /></>}
   </section>;
 }
 

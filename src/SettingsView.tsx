@@ -43,6 +43,7 @@ interface Props {
   loading: boolean;
   mode: AppMode;
   useLocal: () => void;
+  restoreRemote?: () => void;
   disconnect: () => void;
   localFolder: string;
   localLoading: boolean;
@@ -105,7 +106,7 @@ function SettingSelect({ label, value, options, onChange, disabled = false }: { 
   </div>;
 }
 
-export function SettingsView({ settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, mode, useLocal, disconnect, localFolder, localLoading, localSongCount, chooseLocalFolder, rescanLocalLibrary, rename, preferences, setPreferences, updateVersion, updateStatus = 'idle', updateProgress = 0, updateError, updateMessage, checkForUpdate, installUpdate }: Props) {
+export function SettingsView({ settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, mode, useLocal, restoreRemote, disconnect, localFolder, localLoading, localSongCount, chooseLocalFolder, rescanLocalLibrary, rename, preferences, setPreferences, updateVersion, updateStatus = 'idle', updateProgress = 0, updateError, updateMessage, checkForUpdate, installUpdate }: Props) {
   const { language, setLanguage, t } = useI18n();
   const [editing, setEditing] = useState(false);
   const [connectionMode, setConnectionMode] = useState<AppMode>(mode);
@@ -150,7 +151,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
           <div className="settings-section-heading"><div><h2 id="connection-heading">{t('settings.connection.label')}</h2><p>{t('settings.connection.subheading')}</p></div>{connectionMode === 'server' && connected && <span className="connection-status"><CheckCircle2 size={16} />{t('settings.connection.connected')}</span>}</div>
           <div className="library-mode-switch" role="group" aria-label={t('local.modeLabel')}>
             <button type="button" className={connectionMode === 'local' ? 'active' : ''} aria-pressed={connectionMode === 'local'} onClick={() => { setConnectionMode('local'); useLocal(); }}><HardDrive size={17} /><span>{t('server.localMode')}</span></button>
-            <button type="button" className={connectionMode === 'server' ? 'active' : ''} aria-pressed={connectionMode === 'server'} onClick={() => setConnectionMode('server')}><Server size={17} /><span>{t('server.remoteMode')}</span></button>
+            <button type="button" className={connectionMode === 'server' ? 'active' : ''} aria-pressed={connectionMode === 'server'} onClick={() => { setConnectionMode('server'); if (mode !== 'server') restoreRemote?.(); }}><Server size={17} /><span>{t('server.remoteMode')}</span></button>
           </div>
 
           {connectionMode === 'local' && <div className="local-library-settings">
@@ -213,7 +214,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'about' && <section className="settings-section" aria-labelledby="about-heading">
           <div className="settings-section-heading"><div><h2 id="about-heading">{t('settings.about.label')}</h2><p>{t('settings.about.subheading')}</p></div></div>
           <div className="about-brand"><span className="about-brand-mark"><img src="/icon.png" alt="" width="44" height="44" /></span><div><strong>Tenma Player</strong><small>{t('settings.about.tagline')}</small></div></div>
-          <div className="about-list"><div><span>{t('settings.about.version')}</span><strong>0.1.3</strong></div><div><span>{t('settings.about.musicService')}</span><strong>Navidrome / Subsonic API</strong></div><div><span>{t('settings.about.currentConnection')}</span><strong>{mode === 'server' && connected ? serverLabel(connected) : localFolder || t('settings.about.localLibrary')}</strong></div></div>
+          <div className="about-list"><div><span>{t('settings.about.version')}</span><strong>0.1.4</strong></div><div><span>{t('settings.about.musicService')}</span><strong>Navidrome / Subsonic API</strong></div><div><span>{t('settings.about.currentConnection')}</span><strong>{mode === 'server' && connected ? serverLabel(connected) : localFolder || t('settings.about.localLibrary')}</strong></div></div>
           <div className="settings-group update-settings-group"><SettingRow title={t('settings.about.updates')} description={updateError || updateMessage || (updateVersion ? t('settings.about.newVersion', { version: updateVersion }) : t('settings.about.updateDescription'))}><span className="update-settings-control">{updateStatus === 'checking' && <span className="update-checking"><LoaderCircle className="spin" size={15} />{t('settings.about.checking')}</span>}{updateStatus === 'downloading' && <span className="update-checking">{t('settings.about.downloading', { progress: updateProgress })}</span>}{updateStatus !== 'checking' && updateStatus !== 'downloading' && updateVersion && <button className="primary-button compact" onClick={installUpdate}>{t('update.now')}</button>}<button className="secondary-button compact" disabled={updateStatus === 'checking' || updateStatus === 'downloading'} onClick={checkForUpdate}>{t('settings.about.check')}</button></span></SettingRow></div>
         </section>}
         </div>
