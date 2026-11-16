@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, CheckCircle2, ChevronDown, Eye, FolderOpen, HardDrive, Info, LoaderCircle, Palette, PlayCircle, Radio, RefreshCw, Server, Settings2, SlidersHorizontal } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, Disc3, Eye, FolderOpen, HardDrive, Info, LoaderCircle, Palette, PlayCircle, Radio, RefreshCw, Server, Settings2, SlidersHorizontal } from 'lucide-react';
 import { useI18n } from './i18n';
 import type { TranslationKey } from './i18n';
 import type { AppMode, ConnectionSettings } from './types';
@@ -12,8 +12,7 @@ export interface Preferences {
   startPage: 'home' | 'library' | 'playlists';
   showArtists: boolean;
   showDurations: boolean;
-  accent: 'purple' | 'blue';
-  theme: 'dark' | 'gray';
+  theme: 'midnight' | 'noir' | 'spotify';
 }
 export const loadPreferences = (): Preferences => {
   let value: Partial<Preferences> = {};
@@ -21,12 +20,11 @@ export const loadPreferences = (): Preferences => {
   return {
     autoNext: typeof value.autoNext === 'boolean' ? value.autoNext : true,
     audioQuality: value.audioQuality === 'high' || value.audioQuality === 'standard' || value.audioQuality === 'data-saver' ? value.audioQuality : 'original',
-    defaultVolume: typeof value.defaultVolume === 'number' && Number.isFinite(value.defaultVolume) ? Math.min(1, Math.max(0, value.defaultVolume)) : 0.78,
+    defaultVolume: typeof value.defaultVolume === 'number' && Number.isFinite(value.defaultVolume) ? Math.min(1, Math.max(0, value.defaultVolume)) : 0.3,
     startPage: value.startPage === 'library' || value.startPage === 'playlists' ? value.startPage : 'home',
     showArtists: typeof value.showArtists === 'boolean' ? value.showArtists : true,
     showDurations: typeof value.showDurations === 'boolean' ? value.showDurations : true,
-    accent: value.accent === 'blue' ? 'blue' : 'purple',
-    theme: value.theme === 'gray' ? 'gray' : 'dark'
+    theme: value.theme === 'noir' || value.theme === 'spotify' ? value.theme : 'noir'
   };
 };
 export const serverLabel = (settings: ConnectionSettings) => settings.serverName?.trim() || settings.server.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || 'Navidrome';
@@ -150,14 +148,15 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'connection' && <section className="settings-section" aria-labelledby="connection-heading">
           <div className="settings-section-heading"><div><h2 id="connection-heading">{t('settings.connection.label')}</h2><p>{t('settings.connection.subheading')}</p></div>{connectionMode === 'server' && connected && <span className="connection-status"><CheckCircle2 size={16} />{t('settings.connection.connected')}</span>}</div>
           <div className="library-mode-switch" role="group" aria-label={t('local.modeLabel')}>
-            <button type="button" className={connectionMode === 'local' ? 'active' : ''} aria-pressed={connectionMode === 'local'} onClick={() => { setConnectionMode('local'); useLocal(); }}><HardDrive size={17} /><span>{t('server.localMode')}</span></button>
+            <button type="button" className={connectionMode === 'local' ? 'active' : ''} aria-pressed={connectionMode === 'local'} onClick={() => setConnectionMode('local')}><HardDrive size={17} /><span>{t('server.localMode')}</span></button>
             <button type="button" className={connectionMode === 'server' ? 'active' : ''} aria-pressed={connectionMode === 'server'} onClick={() => { setConnectionMode('server'); if (mode !== 'server') restoreRemote?.(); }}><Server size={17} /><span>{t('server.remoteMode')}</span></button>
           </div>
 
           {connectionMode === 'local' && <div className="local-library-settings">
             <div className="local-library-summary"><span className="local-library-icon"><HardDrive size={22} /></span><div><strong>{localFolder || t('local.noFolder')}</strong><small>{localFolder ? t('local.folderSummary', { count: localSongCount }) : t('local.description')}</small></div></div>
             <div className="settings-actions">
-              <button type="button" className="primary-button" disabled={localLoading} onClick={chooseLocalFolder}><FolderOpen size={16} />{localFolder ? t('local.changeFolder') : t('local.chooseFolder')}</button>
+              {mode !== 'local' && <button type="button" className="primary-button" onClick={useLocal}><Disc3 size={16} />{t('local.switchToLocal')}</button>}
+              <button type="button" className={mode !== 'local' ? 'secondary-button' : 'primary-button'} disabled={localLoading} onClick={chooseLocalFolder}><FolderOpen size={16} />{localFolder ? t('local.changeFolder') : t('local.chooseFolder')}</button>
               {localFolder && <button type="button" className="secondary-button" disabled={localLoading} onClick={rescanLocalLibrary}>{localLoading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}{localLoading ? t('local.scanning') : t('local.rescan')}</button>}
             </div>
             <p className="settings-footnote">{t('local.supportedFormats')}</p>
@@ -189,8 +188,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'appearance' && <section className="settings-section" aria-labelledby="appearance-heading">
           <div className="settings-section-heading"><div><h2 id="appearance-heading">{t('settings.appearance.label')}</h2><p>{t('settings.appearance.subheading')}</p></div></div>
           <div className="settings-group">
-            <SettingRow title={t('settings.appearance.theme')} description={t('settings.appearance.themeDescription')}><SettingSelect label={t('settings.appearance.theme')} value={preferences.theme} options={[{ value: 'dark', label: t('settings.appearance.dark') }, { value: 'gray', label: t('settings.appearance.gray') }]} onChange={(value) => update('theme', value as Preferences['theme'])} /></SettingRow>
-            <SettingRow title={t('settings.appearance.accent')} description={t('settings.appearance.accentDescription')}><SettingSelect label={t('settings.appearance.accent')} value={preferences.accent} options={[{ value: 'purple', label: t('settings.appearance.purple') }, { value: 'blue', label: t('settings.appearance.blue') }]} onChange={(value) => update('accent', value as Preferences['accent'])} /></SettingRow>
+            <SettingRow title={t('settings.appearance.theme')} description={t('settings.appearance.themeDescription')}><SettingSelect label={t('settings.appearance.theme')} value={preferences.theme} options={[{ value: 'midnight', label: t('settings.appearance.midnight') }, { value: 'noir', label: t('settings.appearance.noir') }, { value: 'spotify', label: t('settings.appearance.spotify') }]} onChange={(value) => update('theme', value as Preferences['theme'])} /></SettingRow>
             <SettingRow title={t('settings.appearance.startPage')} description={t('settings.appearance.startPageDescription')}><SettingSelect label={t('settings.appearance.startPage')} value={preferences.startPage} options={[{ value: 'home', label: t('nav.home') }, { value: 'library', label: t('nav.library') }, { value: 'playlists', label: t('common.playlists') }]} onChange={(value) => update('startPage', value as Preferences['startPage'])} /></SettingRow>
           </div>
         </section>}
@@ -214,7 +212,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'about' && <section className="settings-section" aria-labelledby="about-heading">
           <div className="settings-section-heading"><div><h2 id="about-heading">{t('settings.about.label')}</h2><p>{t('settings.about.subheading')}</p></div></div>
           <div className="about-brand"><span className="about-brand-mark"><img src="/icon.png" alt="" width="44" height="44" /></span><div><strong>Tenma Player</strong><small>{t('settings.about.tagline')}</small></div></div>
-          <div className="about-list"><div><span>{t('settings.about.version')}</span><strong>0.1.4</strong></div><div><span>{t('settings.about.musicService')}</span><strong>Navidrome / Subsonic API</strong></div><div><span>{t('settings.about.currentConnection')}</span><strong>{mode === 'server' && connected ? serverLabel(connected) : localFolder || t('settings.about.localLibrary')}</strong></div></div>
+          <div className="about-list"><div><span>{t('settings.about.version')}</span><strong>0.1.5</strong></div><div><span>{t('settings.about.musicService')}</span><strong>Navidrome / Subsonic API</strong></div><div><span>{t('settings.about.currentConnection')}</span><strong>{mode === 'server' && connected ? serverLabel(connected) : localFolder || t('settings.about.localLibrary')}</strong></div></div>
           <div className="settings-group update-settings-group"><SettingRow title={t('settings.about.updates')} description={updateError || updateMessage || (updateVersion ? t('settings.about.newVersion', { version: updateVersion }) : t('settings.about.updateDescription'))}><span className="update-settings-control">{updateStatus === 'checking' && <span className="update-checking"><LoaderCircle className="spin" size={15} />{t('settings.about.checking')}</span>}{updateStatus === 'downloading' && <span className="update-checking">{t('settings.about.downloading', { progress: updateProgress })}</span>}{updateStatus !== 'checking' && updateStatus !== 'downloading' && updateVersion && <button className="primary-button compact" onClick={installUpdate}>{t('update.now')}</button>}<button className="secondary-button compact" disabled={updateStatus === 'checking' || updateStatus === 'downloading'} onClick={checkForUpdate}>{t('settings.about.check')}</button></span></SettingRow></div>
         </section>}
         </div>

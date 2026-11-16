@@ -102,7 +102,7 @@ export class NavidromeApi {
   }
 
   async randomSongs(size = 12): Promise<Song[]> {
-    const data = await this.request<{ randomSongs?: { song?: Record<string, unknown>[] } }>('getRandomSongs.view', { size: String(Math.min(12, Math.max(1, size))) });
+    const data = await this.request<{ randomSongs?: { song?: Record<string, unknown>[] } }>('getRandomSongs.view', { size: String(Math.min(500, Math.max(1, size))) });
     return (data.randomSongs?.song || []).map((item) => this.mapSong(item));
   }
 

@@ -21,7 +21,7 @@ Tenma Player brings your music into a simple desktop interface. Connect a Navidr
 
 ## Made for listening
 
-- **A clean interface** — dark surfaces, rounded controls, responsive layouts, and two themes (**Midnight** and **Graphite**).
+- **Three full themes** — **Noir** (black & white, the default), **Midnight** (soft purple), and **Spotify** (green); each theme controls the whole palette, accent color included.
 - **Two sources, one library** — use a local folder as your library, or connect a Navidrome / Subsonic-compatible server. Local mode scans subfolders, reads tags, bitrate, and artwork, and remembers your folder between sessions.
 - **Search and discovery** — search your collection, or refresh random recommendations right on the home screen.
 - **Now Playing** — large auto-sizing artwork, track details, playback controls, and an **Up Next / Lyrics** tabbed panel. Timed lyrics highlight and follow along with a blurred, distance-faded context; plain-text lyrics stay centered and seekable. The cover scales to fit the window so everything stays on one screen.

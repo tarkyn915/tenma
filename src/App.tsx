@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event';
-import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, MoreVertical, Music2, Pause, Play, Plus, Repeat, Search, Server, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, VolumeX, X } from 'lucide-react';
+import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Dices, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, MoreVertical, Music2, Pause, Play, Plus, Repeat, Search, Server, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { NavidromeApi } from './api';
 import { emptyLocalAlbums, emptyLocalPlaylists, emptyLocalSongs, localAlbumsFromSongs, pickLocalLibraryFolder, scanLocalLibrary, searchLocalLibrary } from './localLibrary';
 import type { Album, AppMode, ConnectionSettings, Playlist, PlayerTrack, SearchResults, Song } from './types';
@@ -114,6 +114,25 @@ function AppContent() {
     if (contentScrollRef.current) contentScrollRef.current.scrollTop = historyScroll.current.get(navigation.index) || 0;
   }, [navigation.index]);
   const [showQueue, setShowQueue] = useState(false);
+  const [queueClosing, setQueueClosing] = useState(false);
+  const queuePanelRef = useRef<HTMLElement>(null);
+  const closeQueue = () => {
+    if (!showQueue || queueClosing) return;
+    setQueueClosing(true);
+    window.setTimeout(() => { setShowQueue(false); setQueueClosing(false); }, 180);
+  };
+  const toggleQueue = () => { if (showQueue) closeQueue(); else setShowQueue(true); };
+  // Clicking anywhere outside the queue panel closes it, player bar included.
+  useEffect(() => {
+    if (!showQueue) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (queuePanelRef.current?.contains(target)) return;
+      closeQueue();
+    };
+    document.addEventListener('pointerdown', dismiss);
+    return () => document.removeEventListener('pointerdown', dismiss);
+  }, [showQueue, queueClosing]);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
   const [nowPlayingClosing, setNowPlayingClosing] = useState(false);
   const closeNowPlaying = () => {
@@ -388,7 +407,17 @@ function AppContent() {
     setLibrarySongs(songs.slice(0, LIBRARY_PAGE_SIZE)); setLibrarySongPage(0); setLibraryKnownPageCount(pageCount); setLibraryHasNext(pageCount > 1); setLibrarySongError('');
     setRandomSongs(sampleSongs(songs)); setRandomError(''); setRandomLoading(false); setPlaylists(emptyLocalPlaylists); setPlaylistsError(''); setPlaylistsLoading(false);
   };
+  // Switch the browsing source to the local folder while keeping the remote session
+  // and current playback alive; "Disconnect" performs the full teardown instead.
   const useLocalMode = (notify = true) => {
+    sessionRequest.current++; playlistRequest.current++; albumRequest.current++; artistRequest.current++; randomRequest.current++;
+    setLoading(false); setLocalLoading(false);
+    setMode('local'); setApi(null); applyLocalSongs(localSongs);
+    setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setQuery('');
+    resetDetailHistory();
+    if (notify) setMessage({ type: 'success', text: { key: 'message.localMode' } });
+  };
+  const disconnectRemote = () => {
     sessionRequest.current++; playlistRequest.current++; albumRequest.current++; artistRequest.current++; randomRequest.current++;
     audioRef.current?.pause(); if (audioRef.current) { audioRef.current.removeAttribute('src'); audioRef.current.load(); }
     originalQueue.current = [];
@@ -397,7 +426,7 @@ function AppContent() {
     setIsConnected(false); setConnectedSettings(null); setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setQuery('');
     resetDetailHistory();
     if (!rememberPassword) setPassword('');
-    if (notify) setMessage({ type: 'success', text: { key: 'message.localMode' } });
+    setMessage({ type: 'success', text: { key: 'message.localMode' } });
   };
   const loadLocalLibrary = async (folder: string, notify = false) => {
     if (!folder || !isTauri()) return;
@@ -519,6 +548,16 @@ function AppContent() {
     } catch (error) {
       if (request === librarySongRequest.current && session === sessionRequest.current) setLibrarySongError(errorContent(error, 'error.loadSongs'));
     } finally { if (request === librarySongRequest.current && session === sessionRequest.current) setLibrarySongLoading(false); }
+  };
+  const randomPlay = async (count: number) => {
+    const size = Math.max(1, Math.min(500, Math.round(count) || 20));
+    try {
+      const songs = api ? await api.randomSongs(size) : sampleSongs(localSongs, size);
+      if (!songs.length) { setMessage({ type: 'info', text: { key: 'library.noTracks' } }); return; }
+      playCollection(songs, true);
+    } catch (error) {
+      setMessage({ type: 'error', text: errorContent(error, 'error.loadRandomSongs') });
+    }
   };
   const refreshRandom = async () => {
     const request = ++randomRequest.current;
@@ -657,7 +696,7 @@ function AppContent() {
     return <button key={id} className={cn('nav-item', active && 'active')} aria-current={active ? 'page' : undefined} onClick={() => nav(id)}><Icon size={18} /><span>{label}</span></button>;
   };
 
-  return <div className={cn('app-shell', !preferences.showArtists && 'hide-album-artists', !preferences.showDurations && 'hide-song-durations', preferences.accent === 'blue' && 'accent-blue', preferences.theme === 'gray' && 'theme-gray')}>
+  return <div className={cn('app-shell', !preferences.showArtists && 'hide-album-artists', !preferences.showDurations && 'hide-song-durations', preferences.theme === 'noir' && 'theme-noir', preferences.theme === 'spotify' && 'theme-spotify')}>
     {closePromptOpen && <div className="close-prompt-backdrop" role="presentation"><section className="close-prompt" role="dialog" aria-modal="true" aria-labelledby="close-prompt-title"><h2 id="close-prompt-title">{t('close.title')}</h2><p>{t('close.description')}</p><label className="close-prompt-remember"><input type="checkbox" checked={rememberCloseChoice} onChange={(event) => setRememberCloseChoice(event.target.checked)} /><span>{t('close.remember')}</span></label><div className="close-prompt-actions"><button className="secondary-button" onClick={() => setClosePromptOpen(false)}>{t('close.cancel')}</button><button className="secondary-button" onClick={() => resolveCloseChoice('background')}>{t('close.background')}</button><button className="primary-button" onClick={() => resolveCloseChoice('quit')}>{t('close.quit')}</button></div></section></div>}
     <aside className={cn('sidebar', mobileNav && 'mobile-open')}>
       <div className="server-switcher" ref={serverSwitcherRef}>
@@ -703,14 +742,14 @@ function AppContent() {
         {message && <div className="toast-spacer" />}
         {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : message.type === 'info' ? 'ℹ' : '!'} {resolveMessage(message.text, t)}<button aria-label={t('common.dismissNotification')} onClick={() => setMessage(null)}><X size={15} /></button></div>}
         <div key={page} className="content-page">
-          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} mode={mode} useLocal={() => useLocalMode()} restoreRemote={restoreRemoteConnection} disconnect={() => useLocalMode()} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onPlay={playSong} playlists={playlists} onOpenPlaylist={(playlist) => { setMobileNav(false); void openPlaylist(playlist); }} mode={mode} localFolder={localFolder} onConnect={() => nav('settings')} />}
+          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} mode={mode} useLocal={() => useLocalMode()} restoreRemote={restoreRemoteConnection} disconnect={() => disconnectRemote()} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onPlay={playSong} playlists={playlists} onOpenPlaylist={(playlist) => { setMobileNav(false); void openPlaylist(playlist); }} mode={mode} localFolder={localFolder} onConnect={() => nav('settings')} />}
         </div>
       </div>
     </main>
     <audio ref={audioRef} onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setMessage({ type: 'error', text: { key: 'player.failed' } }); }} onEnded={() => { setPlaying(false); if (preferences.autoNext) next(); }} />
-    <Player track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} showQueue={showQueue} onQueue={() => setShowQueue(!showQueue)} onOpenNowPlaying={() => { setShowQueue(false); setNowPlayingOpen(true); }} />
+    <Player track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} showQueue={showQueue} onQueue={toggleQueue} onOpenNowPlaying={() => { setShowQueue(false); setNowPlayingOpen(true); }} onRandomPlay={randomPlay} />
     {nowPlayingOpen && <NowPlayingView track={currentTrack} queue={queue} queueIndex={currentIndex} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} closing={nowPlayingClosing} api={api} onClose={closeNowPlaying} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} onQueueSelect={(index) => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} onArtist={(name, artistId) => { closeNowPlaying(); openArtist(name, artistId); }} onAlbum={(song) => { closeNowPlaying(); openSongAlbum(song); }} canOpenAlbum={(song) => !!linkedAlbum(song)} />}
-    {showQueue && <section className="queue-panel" aria-label={t('player.queue')}><div className="group-title"><h2>{t('player.queue')}</h2><button className="icon-button" aria-label={t('player.closeQueue')} onClick={() => setShowQueue(false)}><X size={18} /></button></div>{queue.length ? queue.map((song, index) => <button key={`${song.id}-${index}`} className={cn('queue-track', index === currentIndex && 'control-active')} onClick={() => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }}><span>{song.title}<small>{song.artist}</small></span><span className="song-duration">{formatTime(song.duration)}</span></button>) : <p>{t('player.emptyQueue')}</p>}</section>}
+    {showQueue && <section ref={queuePanelRef} className={cn('queue-panel', queueClosing && 'leaving')} aria-label={t('player.queue')}><div className="group-title"><h2>{t('player.queue')}</h2><button className="icon-button" aria-label={t('player.closeQueue')} onClick={closeQueue}><X size={18} /></button></div>{queue.length ? queue.map((song, index) => <button key={`${song.id}-${index}`} className={cn('queue-track', index === currentIndex && 'control-active')} onClick={() => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }}><Cover src={song.coverArt} alt={song.album} className="queue-track-cover" /><span className="queue-track-copy">{song.title}<small>{song.artist}</small></span><span className="song-duration">{formatTime(song.duration)}</span></button>) : <p>{t('player.emptyQueue')}</p>}</section>}
 
   </div>;
 }
@@ -936,8 +975,33 @@ function PlaylistDetailView({ playlist, loading, error, onBack, onPlay, onPlayCo
   </section>;
 }
 
-function Player({ track, playing, currentTime, duration, volume, muted, shuffle, repeat, onToggle, onPrevious, onNext, onSeek, onVolume, onMute, onShuffle, onRepeat, showQueue, onQueue, onOpenNowPlaying }: { track?: PlayerTrack; playing: boolean; currentTime: number; duration: number; volume: number; muted: boolean; shuffle: boolean; repeat: boolean; onToggle: () => void; onPrevious: () => void; onNext: () => void; onSeek: (value: number) => void; onVolume: (value: number) => void; onMute: () => void; onShuffle: () => void; onRepeat: () => void; showQueue: boolean; onQueue: () => void; onOpenNowPlaying: () => void }) {
+function Player({ track, playing, currentTime, duration, volume, muted, shuffle, repeat, onToggle, onPrevious, onNext, onSeek, onVolume, onMute, onShuffle, onRepeat, showQueue, onQueue, onOpenNowPlaying, onRandomPlay }: { track?: PlayerTrack; playing: boolean; currentTime: number; duration: number; volume: number; muted: boolean; shuffle: boolean; repeat: boolean; onToggle: () => void; onPrevious: () => void; onNext: () => void; onSeek: (value: number) => void; onVolume: (value: number) => void; onMute: () => void; onShuffle: () => void; onRepeat: () => void; showQueue: boolean; onQueue: () => void; onOpenNowPlaying: () => void; onRandomPlay: (count: number) => Promise<void> | void }) {
   const { t } = useI18n();
+  const [randomOpen, setRandomOpen] = useState(false);
+  const [randomClosing, setRandomClosing] = useState(false);
+  const [randomCount, setRandomCount] = useState('20');
+  const [randomLoading, setRandomLoading] = useState(false);
+  const randomPopoverRef = useRef<HTMLDivElement>(null);
+  const randomTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeRandomPopover = () => {
+    if (!randomOpen || randomClosing) return;
+    setRandomClosing(true);
+    window.setTimeout(() => { setRandomOpen(false); setRandomClosing(false); }, 180);
+  };
+  useEffect(() => {
+    if (!randomOpen) return;
+    const dismiss = (event: PointerEvent) => { if (!randomPopoverRef.current?.contains(event.target as Node) && !randomTriggerRef.current?.contains(event.target as Node)) closeRandomPopover(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') closeRandomPopover(); };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); };
+  }, [randomOpen]);
+  const startRandomPlay = async () => {
+    if (randomLoading) return;
+    setRandomLoading(true);
+    try { await onRandomPlay(Number(randomCount) || 20); setRandomOpen(false); }
+    finally { setRandomLoading(false); }
+  };
   const total = Number.isFinite(duration) && duration > 0 ? duration : track?.duration || 0;
   const handleVolumeWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -951,6 +1015,17 @@ function Player({ track, playing, currentTime, duration, volume, muted, shuffle,
       <button className="play-button" aria-label={playing ? t('common.pause') : t('common.play')} onClick={onToggle} disabled={!track}>{playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
       <button aria-label={t('common.nextTrack')} disabled={!track} onClick={onNext}><SkipForward size={19} fill="currentColor" /></button>
       <button aria-label={t('common.repeat')} aria-pressed={repeat} className={cn(repeat && 'control-active')} onClick={onRepeat}><Repeat size={17} /></button>
+      <div className="random-play-anchor">
+        <button ref={randomTriggerRef} className={cn('random-play-trigger', randomOpen && 'control-active')} aria-label={t('player.randomPlay')} aria-expanded={randomOpen} onClick={() => setRandomOpen(!randomOpen)}><Dices size={18} /></button>
+        {randomOpen && <div ref={randomPopoverRef} className={cn('random-play-popover', randomClosing && 'leaving')} role="dialog" aria-label={t('player.randomPlay')}>
+          <label className="random-play-count"><span>{t('player.randomPlayCount')}</span>
+            <div className="random-play-row">
+              <input type="number" min={1} max={500} value={randomCount} onChange={(event) => setRandomCount(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void startRandomPlay(); }} />
+              <button type="button" className="random-play-go" disabled={randomLoading} aria-label={t('player.randomPlayStart')} onClick={() => void startRandomPlay()}>{randomLoading ? <LoaderCircle className="spin" size={16} /> : <img src="/icon.png" alt="" className="random-play-logo" />}</button>
+            </div>
+          </label>
+        </div>}
+      </div>
     </div><div className="progress-row"><span>{formatTime(currentTime)}</span><input className="progress-range" aria-label={t('player.progress')} type="range" min="0" max={total} disabled={!track || !total} step="1" value={Math.min(currentTime, total)} style={{ '--range-progress': `${total ? currentTime / total * 100 : 0}%` } as React.CSSProperties} onChange={(e) => onSeek(Number(e.target.value))} /><span>{formatTime(total)}</span></div></div>
     <div className="player-extra" onWheel={handleVolumeWheel}><button className="volume-button" aria-label={muted || volume === 0 ? t('common.unmute') : t('common.mute')} aria-pressed={muted || volume === 0} onClick={onMute}>{muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}</button><input className="volume-range" aria-label={t('common.volume')} type="range" min="0" max="1" step="0.01" value={volume} style={{ '--range-progress': `${volume * 100}%` } as React.CSSProperties} onChange={(e) => onVolume(Number(e.target.value))} /><button aria-label={t('player.queue')} aria-pressed={showQueue} className={cn(showQueue && 'control-active')} onClick={onQueue}><ListMusic size={20} /></button></div>
   </footer>;

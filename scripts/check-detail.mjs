@@ -48,7 +48,7 @@ try {
     const expect = (condition, message) => { if (!condition) throw new Error(message); };
     const byText = (text) => [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === text);
     const footerButton = (label) => document.querySelector('footer button[aria-label="' + label + '"]');
-    const queueTitles = () => [...document.querySelectorAll('.queue-track > span:first-child')].map((span) => span.firstChild.textContent);
+    const queueTitles = () => [...document.querySelectorAll('.queue-track-copy')].map((span) => span.firstChild.textContent);
     const currentTitle = () => document.querySelector('.track-label strong')?.textContent;
     const report = { failures: [], view: new URLSearchParams(location.search).get('view'), checks: [] };
     const pass = (name) => report.checks.push(name);
@@ -304,7 +304,7 @@ try {
   await writeFile(join(directory, 'detail.js'), bundle.outputFiles[0].text);
   const stylesheet = await readFile('src/styles.css', 'utf8');
   const page = join(directory, 'detail.html');
-  await writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${stylesheet}\n.content-page { animation: none; }</style><body><div id="root"></div><script>localStorage.setItem('tenma.language','en');localStorage.setItem('northstar.preferences',JSON.stringify({theme:'gray'}));localStorage.removeItem('tenma.localLibraryPath');</script><script src="detail.js"></script></body></html>`);
+  await writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${stylesheet}\n.content-page { animation: none; }</style><body><div id="root"></div><script>localStorage.setItem('tenma.language','en');localStorage.setItem('northstar.preferences',JSON.stringify({theme:'noir'}));localStorage.removeItem('tenma.localLibraryPath');</script><script src="detail.js"></script></body></html>`);
   const browser = process.env.TENMA_TEST_BROWSER || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
   for (const [view, viewport, remote = false] of [['album', 1280], ['playlist', 1280], ['album', 430], ['playlist', 430], ['album', 1280, true], ['playlist', 1280, true]]) {
     const output = execFileSync(browser, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'profile')}`, '--allow-file-access-from-files', `--window-size=${viewport},960`, '--virtual-time-budget=40000', '--dump-dom', `${pathToFileURL(page).href}?view=${view}${remote ? '&remote=1' : ''}`], { encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore','pipe','pipe'] });

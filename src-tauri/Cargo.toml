@@ -1,6 +1,6 @@
 [package]
 name = "tenma"
-version = "0.1.4"
+version = "0.1.5"
 description = "Tenma Player - a clean Navidrome music player"
 authors = ["tarkyn915"]
 license = "MIT"
