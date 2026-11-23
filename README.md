@@ -19,22 +19,19 @@ Your library. Your music. A focused listening experience.
 
 Tenma Player brings your music into a simple desktop interface. Connect a Navidrome or Subsonic-compatible server, or point it at a local folder on your computer, then browse, search, and play. Built with React, TypeScript, Vite, and Tauri 2, with Windows as the current desktop target.
 
-## Made for listening
+## Screenshots
 
-- **Three full themes** — **Noir** (black & white, the default), **Midnight** (soft purple), and **Spotify** (green); each theme controls the whole palette, accent color included.
-- **Two sources, one library** — use a local folder as your library, or connect a Navidrome / Subsonic-compatible server. Local mode scans subfolders, reads tags, bitrate, and artwork, and remembers your folder between sessions.
-- **Search and discovery** — search your collection, or refresh random recommendations right on the home screen.
-- **Now Playing** — large auto-sizing artwork, track details, playback controls, and an **Up Next / Lyrics** tabbed panel. Timed lyrics highlight and follow along with a blurred, distance-faded context; plain-text lyrics stay centered and seekable. The cover scales to fit the window so everything stays on one screen.
-- **Everyday controls** — play, pause, seek, shuffle, repeat, and manage the queue. Right-click a track (or use its menu button) to add it to a playlist or jump to its artist and album. Scroll over the volume control to adjust it, or click its icon to mute and restore the previous volume.
-- **Playlists at hand** — a collapsible playlist section in the sidebar and a playlist grid on the home screen, each opening its playlist in one click.
-- **Lyrics built in** — local songs read embedded lyrics (USLT / ©lyr / FLAC `LYRICS` and `UNSYNCEDLYRICS`) and sibling `.lrc` files; when nothing is embedded, an online lyrics lookup (LRCLIB) fills the gap.
-- **Localized** — switch between English and Simplified Chinese in **Settings → General**.
-- **Reconnects for you** — remembered servers reconnect automatically on startup and when switching back from local mode.
-- **Runs in the background** — minimize to the system tray and reopen from its icon without quitting playback.
-- **In-app updates** — check for signed releases at startup or from **Settings → About**; download and install without finding an installer yourself.
+<p align="center"><img src="docs/screenshots/main.png" alt="Home with wallpaper theme" width="860" /></p>
+<p align="center"><img src="docs/screenshots/now-playing.png" alt="Now Playing with progressively blurred lyrics" width="860" /></p>
 
-Tenma Player plays music from your own library — a local folder or a Navidrome / Subsonic server. It ships empty and never bundles demo tracks.
+## Features
 
+- **Wallpaper themes** - Noir, Midnight and Spotify palettes, custom wallpaper with adjustable transparency and frosted-glass panels.
+- **Full-screen Now Playing** - large artwork over a blurred cover backdrop, Up Next / Lyrics tabs.
+- **Lyrics** - synced lyrics scroll smoothly with progressive distance blur; hover to sharpen, click a line to seek, scroll freely and jump back with *Back to current*; per-track offset input. Embedded tags, sibling `.lrc` files and LRCLIB fallback.
+- **Two sources** - local folders (MP3, FLAC, WAV, OGG, OPUS, M4A, AAC) or Navidrome / Subsonic servers with auto-reconnect.
+- **Everyday controls** - search, random recommendations, playlists, queue, shuffle/repeat, scroll-to-adjust volume, tray mode.
+- **In-app updates** and English / Simplified Chinese UI.
 ## Get started
 
 1. Download the latest Windows x64 installer from [Releases](https://github.com/tarkyn915/tenma/releases/latest). Choose the `.exe` for a regular installation; an `.msi` is also available.
@@ -99,10 +96,10 @@ Pushes to `main` produce Windows build artifacts. A `v*` tag produces signed ins
 Before tagging, keep the versions in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `src-tauri/tauri.conf.json`, and the About screen in sync. The tag must match the application version.
 
 ```powershell
-# After setting the application version to 0.1.4 and committing the changes:
+# After setting the application version to 0.2.1 and committing the changes:
 git push origin main
-git tag -a v0.1.4 -m "Tenma Player v0.1.4"
-git push origin v0.1.4
+git tag -a v0.2.1 -m "Tenma Player v0.2.1"
+git push origin v0.2.1
 ```
 
 Configure `TAURI_SIGNING_PRIVATE_KEY` in the repository's Actions secrets. Add `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if the key is password protected. The public verification key is embedded in the app. Keep the private key backed up outside the repository and reuse it for future releases so installed clients can verify updates.

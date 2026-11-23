@@ -119,10 +119,10 @@ try {
           const tabTop = tabs()[0].getBoundingClientRect().top;
           expect(tabTop < grid.getBoundingClientRect().top, 'Queue and Lyrics tabs should use the space beside the toolbar');
           await waitFor(() => {
-            const line = restoredList.querySelector('.lyrics-line.active').getBoundingClientRect();
-            const center = line.top + line.height / 2 - restoredList.getBoundingClientRect().top;
-            return Math.abs(center - restoredList.clientHeight * 0.42) < 2;
-          }, 'active lyric just above the center after returning to Lyrics');
+            const active = restoredList.querySelector('.lyrics-line.active'); const m = /translate3d\(0px, (-?[\d.]+)px/.exec(restoredList.querySelector('.lyrics-track').style.transform || ''); const y = m ? -parseFloat(m[1]) : restoredList.scrollTop;
+            const center = active.offsetTop + active.offsetHeight / 2 - y;
+            return Math.abs(center - restoredList.clientHeight * 0.4) < 2;
+          }, 'active lyric just above the center after returning to Lyrics, debug=' + (() => { const a = restoredList.querySelector('.lyrics-line.active'); const r = a.getBoundingClientRect(); const s = restoredList.querySelector('.lyrics-spacer'); const tr = restoredList.querySelector('.lyrics-track'); return JSON.stringify({ center: r.top + r.height / 2 - restoredList.getBoundingClientRect().top, h: restoredList.clientHeight, spacer: s && s.offsetHeight, top: a.offsetTop, tf: tr && tr.style.transform, ctf: tr && getComputedStyle(tr).transform }); })());
         }
         pass('Lyrics: graded class blur without filter transition, sharp active line, raised reading position restored when switching tabs');
         document.querySelector('.now-playing-menu-button').click(); await sleep(100);

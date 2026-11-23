@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useLyricClock } from './useLyricClock';
 import { ChevronDown, LoaderCircle, Minus, MoreHorizontal, Pause, Play, Plus, Repeat, RotateCcw, Shuffle, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -45,8 +45,15 @@ interface Props {
 }
 
 function lyricScrollTop(list: HTMLElement, line: HTMLElement) {
-  return line.offsetTop + line.offsetHeight / 2 - list.clientHeight * 0.42;
+  return line.offsetTop + line.offsetHeight / 2 - list.clientHeight * 0.4;
 }
+
+// Memoised so a line change only re-renders lines whose distance class changed.
+const LyricLine = memo(function LyricLine({ text, cls, start, active, textRef, onSeek }: { text: string; cls: string; start?: number; active: boolean; textRef: RefObject<HTMLSpanElement>; onSeek: (time: number) => void }) {
+  return <button className={cn('lyrics-line', cls)} disabled={start === undefined} onClick={() => start !== undefined && onSeek(start)}>
+    <span className="lyrics-line-text" ref={active ? textRef : undefined}>{text}</span>
+  </button>;
+});
 
 function Artwork({ src, alt, className }: { src?: string; alt: string; className?: string }) {
   const [failed, setFailed] = useState(false);
@@ -77,30 +84,45 @@ export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, cu
   });
   const commitOffsetDraft = () => { if (offsetDraft === null) return; const n = Number(offsetDraft.replace(/s$/i, '').trim()); if (offsetDraft.trim() !== '' && Number.isFinite(n)) setLyricsOffset(n); setOffsetDraft(null); };
   const lyricsListRef = useRef<HTMLDivElement>(null);
-  const lyricsScrollFrame = useRef(0);
-  const animateLyricsScroll = (target: number) => {
-    const list = lyricsListRef.current;
-    if (!list) return;
-    cancelAnimationFrame(lyricsScrollFrame.current);
-    const start = list.scrollTop;
-    const delta = target - start;
-    if (Math.abs(delta) < 2) { list.scrollTop = target; return; }
-    const duration = Math.min(260 + Math.abs(delta) * 0.35, 620);
-    let startTime: number | undefined;
-    // Frame-count fallback keeps the animation finite in headless test environments.
-    const maxFrames = Math.round(duration / 16) + 8;
-    let frame = 0;
-    const step = (now: number) => {
-      startTime ??= now;
-      frame++;
-      const progress = Math.max(Math.min((now - startTime) / duration, 1), Math.min(frame / maxFrames, 1));
-      const eased = progress < .5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
-      list.scrollTop = start + delta * eased;
-      if (progress < 1) lyricsScrollFrame.current = requestAnimationFrame(step);
-    };
-    lyricsScrollFrame.current = requestAnimationFrame(step);
+  // Synced lyrics move as one translated track (CSS transition), Kopuz-style.
+  const lyricsTrackRef = useRef<HTMLDivElement>(null);
+  const manualY = useRef<number | null>(null);
+  const followY = useRef(0);
+  const followTimer = useRef(0);
+  const [detached, setDetached] = useState(false);
+  const applyY = (y: number, mode: 'follow' | 'manual' | 'snap' = 'follow') => {
+    const el = lyricsTrackRef.current;
+    if (!el) return;
+    el.style.transition = mode === 'snap' ? 'none' : mode === 'manual' ? 'transform .18s ease-out' : '';
+    el.style.transform = `translate3d(0, ${-y}px, 0)`;
+    if (mode === 'snap') { void el.offsetHeight; requestAnimationFrame(() => requestAnimationFrame(() => { if (lyricsTrackRef.current === el) el.style.transition = ''; })); }
   };
-  useEffect(() => () => cancelAnimationFrame(lyricsScrollFrame.current), []);
+  const followTarget = () => {
+    const list = lyricsListRef.current;
+    const line = list?.querySelector<HTMLElement>('.lyrics-line.active');
+    return list && line ? lyricScrollTop(list, line) : null;
+  };
+  const backToCurrent = () => {
+    clearTimeout(followTimer.current);
+    manualY.current = null;
+    setDetached(false);
+    const y = followTarget();
+    if (y !== null) { followY.current = y; applyY(y); }
+  };
+  const onLyricsWheel = (event: React.WheelEvent) => {
+    const list = lyricsListRef.current, trackEl = lyricsTrackRef.current;
+    if (!lyrics?.synced || !list || !trackEl) return;
+    const max = Math.max(0, trackEl.scrollHeight - list.clientHeight);
+    manualY.current = Math.min(max, Math.max(0, (manualY.current ?? followY.current) + event.deltaY));
+    applyY(manualY.current, 'manual');
+    setDetached(true);
+    clearTimeout(followTimer.current);
+    followTimer.current = window.setTimeout(backToCurrent, 3000);
+  };
+  useEffect(() => () => clearTimeout(followTimer.current), []);
+  const seekRef = useRef(onSeek);
+  seekRef.current = onSeek;
+  const seekLine = useCallback((time: number) => seekRef.current(time), []);
   const total = Number.isFinite(duration) && duration > 0 ? duration : track?.duration || 0;
   const { activeLine, textRef } = useLyricClock(audioRef, lyrics, total, lyricsOffset, tab === 'lyrics' && !closing, playing);
 
@@ -108,21 +130,19 @@ export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, cu
   // animation instead of the browser's interruptible smooth scroll (which stutters
   // when a new line triggers mid-animation).
   useEffect(() => {
-    if (activeLine < 0) return;
-    const list = lyricsListRef.current;
-    const line = list?.querySelector<HTMLElement>('.lyrics-line.active');
-    if (!list || !line) return;
-    animateLyricsScroll(lyricScrollTop(list, line));
+    if (activeLine < 0 || manualY.current !== null) return;
+    const y = followTarget();
+    if (y !== null) { followY.current = y; applyY(y); }
   }, [activeLine]);
 
   // Opening the lyrics tab snaps straight to the playing line.
   useEffect(() => {
     if (tab !== 'lyrics') return;
-    const list = lyricsListRef.current;
-    const line = list?.querySelector<HTMLElement>('.lyrics-line.active');
-    if (!list || !line) return;
-    list.scrollTop = lyricScrollTop(list, line);
-  }, [tab]);
+    manualY.current = null;
+    setDetached(false);
+    const y = followTarget();
+    if (y !== null) { followY.current = y; applyY(y, 'snap'); }
+  }, [tab, lyrics]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,9 +227,8 @@ export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, cu
                 {lyricsOffset ? <button type="button" className="lyrics-offset-reset" aria-label={t('nowPlaying.offsetReset')} title={t('nowPlaying.offsetReset')} onClick={() => setLyricsOffset(0)}><RotateCcw size={13} /></button> : null}
               </div>
             </div>
-            {lyricsLoading ? <div className="lyrics-state"><LoaderCircle className="spin" size={21} />{t('nowPlaying.loadingLyrics')}</div> : lyricsError ? <div className="lyrics-state"><p>{resolveMessage(lyricsError, t)}</p></div> : lyrics?.lines.length ? <div ref={lyricsListRef} className={cn('lyrics-list', lyrics.synced && 'synced')}>{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}{lyrics.lines.map((line, index) => { const distance = activeLine < 0 ? 0 : Math.abs(index - activeLine); const isActive = index === activeLine; return <button key={`${index}-${line.text}`} className={cn('lyrics-line', isActive ? 'active' : distance <= 1 ? 'adjacent' : distance === 2 ? 'second' : distance <= 6 ? 'distant' : 'far')} disabled={line.start === undefined} onClick={() => line.start !== undefined && onSeek(line.start)}>
-                <span className="lyrics-line-text" ref={isActive ? textRef : undefined}>{line.text}</span>
-              </button>; })}{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}</div> : <div className="lyrics-state"><p>{api || track.localPath ? t('nowPlaying.noLyrics') : t('nowPlaying.connectLyrics')}</p></div>}
+            {lyricsLoading ? <div className="lyrics-state"><LoaderCircle className="spin" size={21} />{t('nowPlaying.loadingLyrics')}</div> : lyricsError ? <div className="lyrics-state"><p>{resolveMessage(lyricsError, t)}</p></div> : lyrics?.lines.length ? <div ref={lyricsListRef} className={cn('lyrics-list', lyrics.synced && 'synced')} onWheel={onLyricsWheel}><div ref={lyricsTrackRef} className="lyrics-track">{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}{lyrics.lines.map((line, index) => { const distance = activeLine < 0 ? 1 : Math.abs(index - activeLine); const isActive = index === activeLine; return <LyricLine key={`${index}-${line.text}`} text={line.text} start={line.start} active={isActive} textRef={textRef} onSeek={seekLine} cls={isActive ? 'active' : distance <= 1 ? 'adjacent' : distance === 2 ? 'second' : distance <= 12 ? 'distant' : 'far'} />; })}{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}</div></div> : <div className="lyrics-state"><p>{api || track.localPath ? t('nowPlaying.noLyrics') : t('nowPlaying.connectLyrics')}</p></div>}
+            {detached && lyrics?.synced ? <button type="button" className="lyrics-follow" onClick={backToCurrent}>{t('nowPlaying.backToCurrent')}</button> : null}
           </div>}
         </div>
       </div>

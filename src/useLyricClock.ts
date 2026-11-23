@@ -41,6 +41,7 @@ export function useLyricClock(audioRef: RefObject<HTMLAudioElement>, lyrics: Lyr
         textRef.current?.style.setProperty('--lyric-progress', value);
       }
     };
+    // rAF is already paused by WebView when the window is hidden/minimized.
     const tick = () => { sync(); frame = requestAnimationFrame(tick); };
     sync();
     if (playing) frame = requestAnimationFrame(tick);
