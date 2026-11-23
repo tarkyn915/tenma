@@ -27,9 +27,9 @@ try {
   const remotePlaylist = { ...fixtures.playlist, songs: songs.map((song, index) => index === 3 ? { ...song, albumId: outsideAlbum.id, album: outsideAlbum.name, artist: outsideAlbum.artist, artistId: outsideAlbum.artistId } : song) };
   let source = await readFile('src/App.tsx', 'utf8');
   const replacements = [
-    ['pages: [loadPreferences().startPage]', "pages: [new URLSearchParams(location.search).get('view') === 'album' ? 'album' : 'playlist']"],
+    ["pages: ['home']", "pages: [new URLSearchParams(location.search).get('view') === 'album' ? 'album' : 'playlist']"],
     ['useState<Album | null>(null)', `useState<Album | null>(${JSON.stringify(fixtures.album)})`],
-    ['useState<Playlist | null>(null)', `useState<Playlist | null>(new URLSearchParams(location.search).has('remote') ? ${JSON.stringify(remotePlaylist)} : ${JSON.stringify(fixtures.playlist)})`],
+    ['const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null)', `const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(new URLSearchParams(location.search).has('remote') ? ${JSON.stringify(remotePlaylist)} : ${JSON.stringify(fixtures.playlist)})`],
     ['const [playlists, setPlaylists] = useState<Playlist[]>(emptyLocalPlaylists)', `const [playlists, setPlaylists] = useState<Playlist[]>(${JSON.stringify([fixtures.playlist, targetPlaylist])})`],
     ['const [albums, setAlbums] = useState<Album[]>(emptyLocalAlbums)', `const [albums, setAlbums] = useState<Album[]>(new URLSearchParams(location.search).has('remote') ? ${JSON.stringify([fixtures.album, relatedAlbum, sameNameArtistAlbum])} : ${JSON.stringify([fixtures.album, relatedAlbum])})`],
     ['useState<NavidromeApi | null>(null)', "useState<NavidromeApi | null>(() => new URLSearchParams(location.search).has('remote') ? new NavidromeApi({ server: 'https://fixture.invalid', username: 'fixture' }, 'fixture') : null)"]
@@ -188,6 +188,18 @@ try {
         expect(second, 'Artist page does not expose its related album');
         expect(![...document.querySelectorAll('.album-card')].some((button) => button.textContent.includes('Another same-name artist')), 'Artist ID lookup mixed same-named artists');
         if (new URLSearchParams(location.search).has('remote')) expect(window.fixtureApiCalls.includes('getArtist.view:artist-1'), 'Remote artist navigation did not use getArtist with the supplied ID');
+        const albumArtistLink = second.querySelector('.album-artist button.metadata-link');
+        expect(albumArtistLink, 'Related album card is missing its artist link');
+        const artistLookupCount = () => window.fixtureApiCalls.filter((call) => call.startsWith('getArtist.view:')).length;
+        const priorArtistLookups = artistLookupCount();
+        albumArtistLink.click(); await sleep();
+        expect(document.querySelector('.artist-detail') && title() === 'Artist 1', 'Album-card artist link opened an album instead of its artist');
+        if (new URLSearchParams(location.search).has('remote')) {
+          await waitFor(() => artistLookupCount() > priorArtistLookups, 'album-card artist lookup by ID');
+          expect(window.fixtureApiCalls.includes('getArtist.view:artist-1'), 'Album-card artist link did not request its artist ID');
+        }
+        expect(currentTitle() === savedTitle && audio.currentTime === 41 && window.fixtureAudioLoads === savedLoads, 'Album-card artist navigation changed playback');
+        await goBack(); expect(title() === 'Artist 1' && document.querySelector('.artist-detail'), 'Back from album-card artist link failed');
         second.click(); await sleep();
         expect(title() === 'Second album', 'Artist album card opened wrong album');
         document.querySelector('.detail-meta button.metadata-link').click(); await sleep();
@@ -292,6 +304,70 @@ try {
           await sleep(100);
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
           pass('context-menu navigation, right-click versus playback, add-to-playlist, disabled local mode and menu button');
+          if (new URLSearchParams(location.search).has('remote') && window.innerWidth > 720) {
+            const playlistNav = document.querySelector('.playlists-nav');
+            playlistNav.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 280, button: 2 }));
+            await waitFor(() => document.querySelector('.playlist-context-menu'), 'playlist section context menu');
+            const createAction = [...document.querySelectorAll('.playlist-context-menu button')].find((button) => button.textContent.includes('Create playlist'));
+            expect(createAction, 'Playlist context menu does not offer creation');
+            createAction.click();
+            await waitFor(() => document.querySelector('.create-playlist-dialog'), 'create playlist dialog');
+            const nameInput = document.querySelector('.create-playlist-dialog input');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(nameInput, 'UI created playlist');
+            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleep();
+            document.querySelector('.create-playlist-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            await waitFor(() => window.fixtureApiCalls.includes('createPlaylist.view:UI created playlist'), 'createPlaylist API request');
+            await waitFor(() => !document.querySelector('.create-playlist-dialog'), 'dialog close after playlist creation');
+            pass('playlist section right-click creates a server playlist');
+          }
+          if (new URLSearchParams(location.search).has('remote')) {
+          const editPlaylistButton = byText('Edit playlist');
+          expect(editPlaylistButton, 'Playlist detail is missing Edit playlist');
+          editPlaylistButton.click();
+          await waitFor(() => document.querySelector('.edit-playlist-dialog'), 'edit playlist dialog');
+          const renameInput = document.querySelector('.edit-playlist-dialog input');
+          expect(renameInput, 'Edit playlist dialog is missing its name input');
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(renameInput, 'Renamed fixture playlist');
+          renameInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await sleep();
+          byText('Save').click();
+          await waitFor(() => window.fixtureApiRequests.some((request) => request.endpoint === 'updatePlaylist.view' && request.params.playlistId === 'detail-playlist' && request.params.name === 'Renamed fixture playlist'), 'rename updatePlaylist request');
+          await waitFor(() => title() === 'Renamed fixture playlist' && [...document.querySelectorAll('.playlist-nav-item')].some((item) => item.textContent.includes('Renamed fixture playlist')), 'renamed playlist detail and sidebar');
+          pass('playlist rename sends playlistId/name and updates selected detail and sidebar');
+
+          const removeRow = getRows()[0];
+          const removeSongId = 'detail-song-0';
+          await openContextMenu();
+          const removeAction = byText('Remove from playlist');
+          expect(removeAction, 'Playlist context menu is missing Remove from playlist');
+          removeAction.click();
+          await waitFor(() => window.fixtureApiRequests.some((request) => request.endpoint === 'updatePlaylist.view' && request.params.playlistId === 'detail-playlist' && request.params.songIdToRemove === removeSongId), 'remove updatePlaylist request');
+          await waitFor(() => !getRows().some((row) => row.textContent.includes('Track 1')), 'removed playlist song still visible');
+          pass('playlist right-click removes a song with songIdToRemove');
+
+          const deleteRequests = () => window.fixtureApiRequests.filter((request) => request.endpoint === 'deletePlaylist.view');
+          byText('Edit playlist').click();
+          await waitFor(() => document.querySelector('.edit-playlist-dialog'), 'edit playlist dialog before delete');
+          byText('Delete playlist').click();
+          await waitFor(() => byText('Cancel'), 'delete confirmation');
+          const deletesBeforeCancel = deleteRequests().length;
+          byText('Cancel').click();
+          await waitFor(() => document.querySelector('.edit-playlist-dialog h2')?.textContent === 'Edit playlist', 'cancelled delete confirmation');
+          expect(deleteRequests().length === deletesBeforeCancel, 'Cancelling playlist deletion sent a request');
+          expect(title() === 'Renamed fixture playlist' && [...document.querySelectorAll('.playlist-nav-item')].some((item) => item.textContent.includes('Renamed fixture playlist')), 'Cancelling deletion changed the selected playlist or sidebar');
+          byText('Edit playlist').click();
+          await waitFor(() => document.querySelector('.edit-playlist-dialog'), 'edit playlist dialog for confirmed delete');
+          byText('Delete playlist').click();
+          await waitFor(() => byText('Cancel'), 'delete confirmation for confirmed delete');
+          const confirmation = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Delete' || button.textContent.trim() === 'Delete playlist');
+          expect(confirmation, 'Delete confirmation is missing its confirm action');
+          confirmation.click();
+          await waitFor(() => deleteRequests().some((request) => request.params.id === 'detail-playlist'), 'deletePlaylist request');
+          await waitFor(() => ![...document.querySelectorAll('.playlist-nav-item')].some((item) => item.textContent.includes('Renamed fixture playlist')) && title() !== 'Renamed fixture playlist', 'deleted playlist removed from sidebar and selected page');
+          expect(!document.querySelector('.detail-track-list'), 'Deleted playlist detail remained selected');
+          pass('playlist deletion can be cancelled without a request and confirmed deletion removes sidebar and detail');
+          }
         }
         expect(!document.querySelector('button button'), 'Nested interactive buttons in track rows');
         expect(currentTitle() === savedTitle && audio.currentTime === 41 && window.fixtureAudioLoads === savedLoads, 'Metadata navigation changed the queue, track or progress');
@@ -299,7 +375,8 @@ try {
       const result = document.createElement('pre'); result.id='detail-result'; result.textContent=JSON.stringify(report); result.style.display='none'; document.body.append(result);
     })();
   `;
-  const entry = `${source}\nimport { createRoot } from 'react-dom/client';\n// Keep context-menu assertions deterministic under --virtual-time-budget: timers fast-forward\n// without frames, so a stale scroll-restoration event can close a freshly opened menu mid-test.\n// Scroll handling is paused only while a menu is open; no test scrolls an open menu.\ndocument.addEventListener('scroll', (event) => { if (document.querySelector('.track-context-menu')) event.stopImmediatePropagation(); }, true);\nwindow.fixtureApiCalls=[]; globalThis.fetch=async(url)=>{const address=new URL(url), endpoint=address.pathname.split('/').pop(), id=address.searchParams.get('id');window.fixtureApiCalls.push(endpoint+':'+id);const album=(${JSON.stringify([fixtures.album, relatedAlbum, outsideAlbum])}).find((item)=>item.id===id);return {ok:true,json:async()=>({'subsonic-response':{status:'ok',...(endpoint==='getArtist.view'?{artist:{id,album:(${JSON.stringify([fixtures.album, relatedAlbum])}).filter((item)=>item.artistId===id)}}:endpoint==='getPlaylists.view'?{playlists:{playlist:(${JSON.stringify([fixtures.playlist, targetPlaylist])})}}:endpoint==='getPlaylist.view'?{playlist:{id, name:(${JSON.stringify(fixtures.playlist)}).name, entry: id==='target-playlist'?[]:(${JSON.stringify(fixtures.playlist)}).songs}}:{album:album?{...album,song:album.songs}:undefined})}})}};\nconst audioStates = new WeakMap(); const audioSources = new WeakMap(); window.fixtureAudioLoads = 0;\nObject.defineProperty(HTMLMediaElement.prototype, 'src', { configurable: true, get() { return audioSources.get(this) || ''; }, set(value) { audioSources.set(this,value); } });\nObject.defineProperty(HTMLMediaElement.prototype, 'paused', { configurable: true, get() { return audioStates.get(this) !== true; } });\nHTMLMediaElement.prototype.load = function() { window.fixtureAudioLoads++; this.currentTime=0; };\nHTMLMediaElement.prototype.play = function() { audioStates.set(this,true); this.dispatchEvent(new Event('play')); return Promise.resolve(); };\nHTMLMediaElement.prototype.pause = function() { audioStates.set(this,false); this.dispatchEvent(new Event('pause')); };\nlet seed=7; Math.random=()=>((seed=(seed*16807)%2147483647)-1)/2147483646;\ncreateRoot(document.getElementById('root')).render(<App />);\n${tests}`;
+  const entry = `${source}\nimport { createRoot } from 'react-dom/client';\n// Keep context-menu assertions deterministic under --virtual-time-budget: timers fast-forward\n// without frames, so a stale scroll-restoration event can close a freshly opened menu mid-test.\n// Scroll handling is paused only while a menu is open; no test scrolls an open menu.\ndocument.addEventListener('scroll', (event) => { if (document.querySelector('.track-context-menu')) event.stopImmediatePropagation(); }, true);\nwindow.fixtureApiCalls=[]; let rafNow = 0; globalThis.requestAnimationFrame = (callback) => setTimeout(() => { rafNow += 50; callback(rafNow); }, 0); globalThis.cancelAnimationFrame = (id) => clearTimeout(id); globalThis.fetch=async(url)=>{const address=new URL(url), endpoint=address.pathname.split('/').pop(), id=address.searchParams.get('id');window.fixtureApiCalls.push(endpoint+':'+(id||address.searchParams.get('name')));const album=(${JSON.stringify([fixtures.album, relatedAlbum, outsideAlbum])}).find((item)=>item.id===id);return {ok:true,json:async()=>({'subsonic-response':{status:'ok',...(endpoint==='getArtist.view'?{artist:{id,album:(${JSON.stringify([fixtures.album, relatedAlbum])}).filter((item)=>item.artistId===id)}}:endpoint==='getPlaylists.view'?{playlists:{playlist:(${JSON.stringify([fixtures.playlist, targetPlaylist])})}}:endpoint==='getPlaylist.view'?{playlist:{id, name:(${JSON.stringify(fixtures.playlist)}).name, entry: id==='target-playlist'?[]:(${JSON.stringify(fixtures.playlist)}).songs}}:{album:album?{...album,song:album.songs}:undefined})}})}};\nwindow.fixturePlaylists=${JSON.stringify([fixtures.playlist, targetPlaylist])}; window.fixtureApiRequests=[]; globalThis.fetch=async(url)=>{const address=new URL(url), endpoint=address.pathname.split('/').pop(), id=address.searchParams.get('id'), playlistId=address.searchParams.get('playlistId'), name=address.searchParams.get('name');window.fixtureApiRequests.push({endpoint,params:Object.fromEntries(address.searchParams.entries())});window.fixtureApiCalls.push(endpoint+':'+(id||playlistId||name||address.searchParams.get('songIdToAdd')));if(endpoint==='updatePlaylist.view'&&playlistId&&name){const item=window.fixturePlaylists.find((playlist)=>playlist.id===playlistId);if(item)item.name=name;}if(endpoint==='updatePlaylist.view'&&playlistId&&address.searchParams.get('songIdToRemove')){const item=window.fixturePlaylists.find((playlist)=>playlist.id===playlistId);if(item)item.songs=item.songs.filter((song)=>song.id!==address.searchParams.get('songIdToRemove'));}if(endpoint==='deletePlaylist.view')window.fixturePlaylists=window.fixturePlaylists.filter((playlist)=>playlist.id!==id);const album=(${JSON.stringify([fixtures.album, relatedAlbum, outsideAlbum])}).find((item)=>item.id===id);const detailPlaylist=window.fixturePlaylists.find((item)=>item.id===id)||${JSON.stringify(fixtures.playlist)};return {ok:true,json:async()=>({'subsonic-response':{status:'ok',...(endpoint==='getArtist.view'?{artist:{id,album:(${JSON.stringify([fixtures.album, relatedAlbum])}).filter((item)=>item.artistId===id)}}:endpoint==='getPlaylists.view'?{playlists:{playlist:window.fixturePlaylists}}:endpoint==='getPlaylist.view'?{playlist:{id,name:detailPlaylist.name,entry:id==='target-playlist'?[]:(${JSON.stringify(fixtures.playlist)}).songs}}:endpoint==='updatePlaylist.view'||endpoint==='deletePlaylist.view'?{}:{album:album?{...album,song:album.songs}:undefined})}})}};
+const audioStates = new WeakMap(); const audioSources = new WeakMap(); window.fixtureAudioLoads = 0;\nObject.defineProperty(HTMLMediaElement.prototype, 'src', { configurable: true, get() { return audioSources.get(this) || ''; }, set(value) { audioSources.set(this,value); } });\nObject.defineProperty(HTMLMediaElement.prototype, 'paused', { configurable: true, get() { return audioStates.get(this) !== true; } });\nHTMLMediaElement.prototype.load = function() { window.fixtureAudioLoads++; this.currentTime=0; };\nHTMLMediaElement.prototype.play = function() { audioStates.set(this,true); this.dispatchEvent(new Event('play')); return Promise.resolve(); };\nHTMLMediaElement.prototype.pause = function() { audioStates.set(this,false); this.dispatchEvent(new Event('pause')); };\nlet seed=7; Math.random=()=>((seed=(seed*16807)%2147483647)-1)/2147483646;\ncreateRoot(document.getElementById('root')).render(<App />);\n${tests}`;
   const bundle = await build({ stdin: { contents: entry, resolveDir: resolve('src'), loader: 'tsx' }, bundle: true, platform: 'browser', format: 'iife', write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
   await writeFile(join(directory, 'detail.js'), bundle.outputFiles[0].text);
   const stylesheet = await readFile('src/styles.css', 'utf8');

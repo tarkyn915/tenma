@@ -44,10 +44,25 @@ assert.equal(new URL(detail.songs[0].streamUrl).searchParams.get('id'), 'song/1'
 assert.equal(detail.songCount, 1);
 assert.equal(detail.songs[0].bitRate, 320);
 envelope = { status: 'ok' };
+await api.createPlaylist('Road trip & friends');
+assert.equal(lastUrl.pathname, '/rest/createPlaylist.view');
+assert.equal(lastUrl.searchParams.get('name'), 'Road trip & friends');
+await api.renamePlaylist('p 1', 'Renamed playlist');
+assert.equal(lastUrl.pathname, '/rest/updatePlaylist.view');
+assert.equal(lastUrl.searchParams.get('playlistId'), 'p 1');
+assert.equal(lastUrl.searchParams.get('name'), 'Renamed playlist');
+await api.deletePlaylist('p 1');
+assert.equal(lastUrl.pathname, '/rest/deletePlaylist.view');
+assert.equal(lastUrl.searchParams.get('id'), 'p 1');
+envelope = { status: 'ok' };
 await api.addToPlaylist('p 1', 'song/1');
 assert.equal(lastUrl.pathname, '/rest/updatePlaylist.view');
 assert.equal(lastUrl.searchParams.get('playlistId'), 'p 1');
 assert.equal(lastUrl.searchParams.get('songIdToAdd'), 'song/1');
+await api.removeFromPlaylist('p 1', 'song/1');
+assert.equal(lastUrl.pathname, '/rest/updatePlaylist.view');
+assert.equal(lastUrl.searchParams.get('playlistId'), 'p 1');
+assert.equal(lastUrl.searchParams.get('songIdToRemove'), 'song/1');
 envelope = { status: 'ok', playlist: { id: 'empty', name: 'Empty playlist' } };
 assert.deepEqual((await api.playlist('empty')).songs, []);
 envelope = { status: 'ok' };
@@ -162,16 +177,19 @@ assert.equal(loadLanguage(), 'en', 'Invalid stored languages must fall back to E
 storage.delete('tenma.language');
 console.log('PASS: English default, Chinese translations, interpolation and language persistence');
 
-const { SettingsView, SettingSelect, loadPreferences, serverLabel, I18nContext } = await load('src/SettingsView.tsx', '', "export { SettingSelect }; export { I18nContext } from './i18n';");
+const { SettingsView, SettingSelect, loadPreferences, serverLabel, I18nContext } = await load('src/SettingsView.tsx', '', "export { I18nContext } from './i18n';");
 const preferences = loadPreferences();
 assert.equal(preferences.defaultVolume, 0.3, 'The default volume must be 30%');
-assert.equal(preferences.theme, 'noir', 'The default theme must be Noir');
+assert.equal(preferences.theme, 'midnight', 'The default theme must be Midnight');
 storage.set('northstar.preferences', '{broken');
 assert.deepEqual(loadPreferences(), preferences);
 storage.set('northstar.preferences', JSON.stringify({ defaultVolume: 5, startPage: 'playlists', showArtists: false, showDurations: false, theme: 'spotify' }));
 assert.equal(loadPreferences().defaultVolume, 1);
-assert.equal(loadPreferences().startPage, 'playlists');
-assert.equal(loadPreferences().showArtists, false);
+assert.equal('startPage' in loadPreferences(), false, 'Startup page setting is removed');
+assert.equal('showArtists' in loadPreferences(), false, 'List display options are always on');
+storage.set('northstar.preferences', JSON.stringify({ theme: 'nord' }));
+assert.equal(loadPreferences().theme, 'midnight', 'Removed themes must fall back to Midnight');
+storage.set('northstar.preferences', JSON.stringify({ theme: 'spotify' }));
 assert.equal(loadPreferences().theme, 'spotify', 'The Spotify theme must load from preferences');
 storage.set('northstar.preferences', JSON.stringify({ defaultVolume: 5, startPage: 'playlists', showArtists: false, showDurations: false }));
 assert.equal(serverLabel({ server: 'https://music.example.com/', username: '' }), 'music.example.com');
@@ -181,7 +199,8 @@ const props = { settings, setSettings: noop, password: '', setPassword: noop, re
 const disconnected = renderToStaticMarkup(React.createElement(SettingsView, { ...props, connected: null }));
 assert.ok(disconnected.includes('Test and connect'));
 assert.ok(disconnected.includes('aria-label="Settings sections"'));
-for (const category of ['General', 'Connection', 'Appearance', 'Playback', 'Quality', 'Content', 'About']) assert.ok(disconnected.includes(category));
+for (const category of ['General', 'Connection', 'Appearance', 'Playback', 'Quality', 'About']) assert.ok(disconnected.includes(category));
+assert.ok(!disconnected.includes('List display options'), 'The Content section must be removed');
 assert.ok(disconnected.includes('Language and app preferences'));
 assert.ok(!disconnected.includes('Auto-play next song'), 'Only the active settings category should render');
 const connected = renderToStaticMarkup(React.createElement(SettingsView, { ...props, connected: settings }));
@@ -204,25 +223,23 @@ assert.ok(html.includes('aria-label="Random play"'), 'The player must expose the
 assert.ok(html.includes('No playlists yet'));
 assert.ok(!html.includes('\u591c\u95f4\u6f2b\u6e38'));
 assert.ok(!html.includes('\u6e05\u6668\u7075\u611f'));
-assert.ok(html.includes('hide-album-artists'));
-assert.ok(html.includes('hide-song-durations'));
+assert.ok(!html.includes('hide-album-artists'), 'Album artists are always shown');
+assert.ok(!html.includes('hide-song-durations'), 'Song durations are always shown');
 assert.ok(!html.includes('theme-gray') && !html.includes('accent-blue'), 'The old theme variants must be gone');
-assert.ok(html.includes('theme-noir'), 'The default Noir theme must apply');
+assert.ok(!html.includes('theme-noir') && !html.includes('theme-midnight'), 'The default Midnight theme uses base variables without a theme class');
 assert.ok(!html.includes('theme-spotify'), 'No other theme class may apply by default');
 storage.set('northstar.preferences', JSON.stringify({ theme: 'spotify' }));
 const spotifyShell = renderToStaticMarkup(React.createElement(App));
 assert.ok(spotifyShell.includes('theme-spotify'), 'The Spotify theme class must apply to the app shell');
 storage.set('northstar.preferences', JSON.stringify({ defaultVolume: 5, startPage: 'playlists', showArtists: false, showDurations: false }));
+storage.set('tenma.backgroundImage', 'C:\\bg.png');
+const backgroundHtml = renderToStaticMarkup(React.createElement(App));
+assert.ok(backgroundHtml.length > 0, 'Background images must not break server-side rendering');
+storage.delete('tenma.backgroundImage');
 assert.ok(html.includes('Local mode'));
 assert.ok(!html.includes('Demo mode'));
 storage.set('northstar.preferences', JSON.stringify({ startPage: 'library' }));
-const libraryHtml = renderToStaticMarkup(React.createElement(App));
-assert.ok(libraryHtml.includes('library-stats'));
-assert.equal((libraryHtml.match(/class="library-stat"/g) || []).length, 4);
-assert.ok(!libraryHtml.includes('Recommended for you'), 'The library page must not duplicate the home recommendations');
-assert.ok(libraryHtml.includes('No tracks yet'));
-assert.equal((libraryHtml.match(/class="library-track-row"/g) || []).length, 0);
-assert.ok(!libraryHtml.includes('library-tabs'));
+assert.ok(renderToStaticMarkup(React.createElement(App)).includes('Recommended for you'), 'A stale startPage value must be ignored; the app always opens on Home');
 storage.set('northstar.preferences', JSON.stringify({ startPage: 'home' }));
 const homeHtml = renderToStaticMarkup(React.createElement(App));
 assert.ok(homeHtml.includes('Recommended for you'));
@@ -295,6 +312,7 @@ const searchHtml = renderToStaticMarkup(React.createElement(SearchView, searchPr
 assert.ok(searchHtml.includes('search-hero'));
 assert.ok(searchHtml.includes('Recommended for you'));
 assert.ok(searchHtml.includes('Refresh'));
+assert.ok(searchHtml.includes('aria-label="View artist Mira Sol"'));
 assert.ok(!searchHtml.includes('No results found'));
 const resultHtml = renderToStaticMarkup(React.createElement(SearchView, { ...searchProps, query: 'Mira', results: { songs: fixtureSongs, albums: fixtureAlbums, artists: [{ id: 'Mira Sol', name: 'Mira Sol' }] } }));
 assert.ok(resultHtml.includes('Night Drive'));
@@ -419,3 +437,29 @@ assert.equal(await fetchOnlineLyrics({ title: 'Song', artist: 'Artist' }), null,
 globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => null });
 await assert.rejects(() => fetchOnlineLyrics({ title: 'Song', artist: 'Artist' }), /500/, 'Service errors must surface instead of showing as missing lyrics');
 console.log('PASS: online lyrics exact match, search fallback with duration scoring, empty results and error propagation');
+
+const { perceivedVolume } = await load('src/audioFades.ts');
+assert.equal(perceivedVolume(0.5), 0.25, 'Perceptual volume must be quadratic');
+assert.ok(Math.abs(perceivedVolume(0.1) - 0.01) < 1e-9, 'Perceptual volume at 10% should be 1%');
+assert.equal(perceivedVolume(0), 0);
+assert.equal(perceivedVolume(1), 1);
+assert.equal(perceivedVolume(1.5), 1, 'Volume must clamp to 1');
+console.log('PASS: perceptual volume mapping');
+
+lyricRequests = [];
+globalThis.fetch = async (url) => {
+  const address = String(url);
+  if (address.includes('/api/get?')) return { ok: false, status: 404, json: async () => null };
+  return { ok: true, status: 200, json: async () => [
+    { trackName: 'Aurora', artistName: 'Someone', duration: 210, syncedLyrics: '[00:01.00]English words' },
+    { trackName: '欧若拉', artistName: '张韶涵', duration: 210, syncedLyrics: '[00:01.00]中文歌词' }
+  ] };
+};
+const chinese = await fetchOnlineLyrics({ title: '欧若拉', artist: '张韶涵', album: '', duration: 210 });
+assert.equal(chinese?.lines[0].text, '中文歌词', 'A Chinese song must pick Chinese lyrics, not an English same-titled entry');
+globalThis.fetch = async (url) => {
+  if (String(url).includes('/api/get?')) return { ok: false, status: 404, json: async () => null };
+  return { ok: true, status: 200, json: async () => [{ trackName: 'Aurora', artistName: 'Someone', duration: 210, syncedLyrics: '[00:01.00]English words' }] };
+};
+assert.equal(await fetchOnlineLyrics({ title: '欧若拉', artist: '张韶涵', album: '', duration: 210 }), null, 'A completely unrelated title must be rejected instead of showing wrong lyrics');
+console.log('PASS: online lyrics reject mismatched titles (Chinese song vs English entry)');

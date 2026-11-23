@@ -163,8 +163,24 @@ export class NavidromeApi {
     return (data.artist?.album || []).map((item) => this.mapAlbum(item));
   }
 
+  async createPlaylist(name: string): Promise<void> {
+    await this.request('createPlaylist.view', { name: name.trim() });
+  }
+
+  async renamePlaylist(playlistId: string, name: string): Promise<void> {
+    await this.request('updatePlaylist.view', { playlistId, name: name.trim() });
+  }
+
+  async deletePlaylist(id: string): Promise<void> {
+    await this.request('deletePlaylist.view', { id });
+  }
+
   async addToPlaylist(playlistId: string, songId: string): Promise<void> {
     await this.request('updatePlaylist.view', { playlistId, songIdToAdd: songId });
+  }
+
+  async removeFromPlaylist(playlistId: string, songId: string): Promise<void> {
+    await this.request('updatePlaylist.view', { playlistId, songIdToRemove: songId });
   }
 
   async playlists(): Promise<Playlist[]> {

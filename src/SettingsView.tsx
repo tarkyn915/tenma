@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, CheckCircle2, ChevronDown, Disc3, Eye, FolderOpen, HardDrive, Info, LoaderCircle, Palette, PlayCircle, Radio, RefreshCw, Server, Settings2, SlidersHorizontal } from 'lucide-react';
+import { Plus, X, Check, CheckCircle2, ChevronDown, Disc3, FolderOpen, HardDrive, Info, LoaderCircle, Palette, PlayCircle, Radio, RefreshCw, Server, Settings2, SlidersHorizontal } from 'lucide-react';
 import { useI18n } from './i18n';
 import type { TranslationKey } from './i18n';
 import type { AppMode, ConnectionSettings } from './types';
+import { BUILTIN_WALLPAPERS, DEFAULT_WALLPAPER_OPACITY } from './wallpapers';
+import type { WallpaperId } from './wallpapers';
 
 export type Page = 'home' | 'search' | 'library' | 'artists' | 'albums' | 'playlists' | 'settings' | 'album' | 'artist' | 'playlist';
 export interface Preferences {
   autoNext: boolean;
   audioQuality: 'original' | 'high' | 'standard' | 'data-saver';
   defaultVolume: number;
-  startPage: 'home' | 'library' | 'playlists';
-  showArtists: boolean;
-  showDurations: boolean;
-  theme: 'midnight' | 'noir' | 'spotify';
+  theme: Theme;
 }
+export const THEMES = ['midnight', 'noir', 'spotify', 'aurora', 'rose'] as const;
+export type Theme = typeof THEMES[number];
 export const loadPreferences = (): Preferences => {
   let value: Partial<Preferences> = {};
   try { value = JSON.parse(localStorage.getItem('northstar.preferences') || '{}') || {}; } catch { /* Restore defaults for invalid stored settings. */ }
@@ -21,15 +22,25 @@ export const loadPreferences = (): Preferences => {
     autoNext: typeof value.autoNext === 'boolean' ? value.autoNext : true,
     audioQuality: value.audioQuality === 'high' || value.audioQuality === 'standard' || value.audioQuality === 'data-saver' ? value.audioQuality : 'original',
     defaultVolume: typeof value.defaultVolume === 'number' && Number.isFinite(value.defaultVolume) ? Math.min(1, Math.max(0, value.defaultVolume)) : 0.3,
-    startPage: value.startPage === 'library' || value.startPage === 'playlists' ? value.startPage : 'home',
-    showArtists: typeof value.showArtists === 'boolean' ? value.showArtists : true,
-    showDurations: typeof value.showDurations === 'boolean' ? value.showDurations : true,
-    theme: value.theme === 'noir' || value.theme === 'spotify' ? value.theme : 'noir'
+    // Removed themes (ocean, nord, ...) fall back to Midnight.
+    theme: value.theme && THEMES.includes(value.theme) ? value.theme : 'midnight'
   };
 };
 export const serverLabel = (settings: ConnectionSettings) => settings.serverName?.trim() || settings.server.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || 'Navidrome';
 
 interface Props {
+  openServerForm?: boolean;
+  backgroundImage?: string;
+  onChooseBackground?: () => void;
+  onClearBackground?: () => void;
+  wallpaper?: WallpaperId;
+  onWallpaperChange?: (id: WallpaperId) => void;
+  wallpaperOpacity?: number;
+  onWallpaperOpacityChange?: (value: number) => void;
+  wallpaperBlur?: number;
+  onWallpaperBlurChange?: (value: number) => void;
+  onWallpaperReset?: () => void;
+  customWallpaperSrc?: string;
   settings: ConnectionSettings;
   setSettings: (settings: ConnectionSettings) => void;
   connected: ConnectionSettings | null;
@@ -60,7 +71,7 @@ interface Props {
   installUpdate?: () => void;
 }
 
-type SettingsSection = 'general' | 'connection' | 'appearance' | 'playback' | 'quality' | 'content' | 'about';
+type SettingsSection = 'general' | 'connection' | 'appearance' | 'playback' | 'quality' | 'about';
 
 const sections: { id: SettingsSection; labelKey: TranslationKey; descriptionKey: TranslationKey; icon: typeof Radio }[] = [
   { id: 'general', labelKey: 'settings.general.label', descriptionKey: 'settings.general.description', icon: Settings2 },
@@ -68,7 +79,6 @@ const sections: { id: SettingsSection; labelKey: TranslationKey; descriptionKey:
   { id: 'appearance', labelKey: 'settings.appearance.label', descriptionKey: 'settings.appearance.description', icon: Palette },
   { id: 'playback', labelKey: 'settings.playback.label', descriptionKey: 'settings.playback.description', icon: PlayCircle },
   { id: 'quality', labelKey: 'settings.quality.label', descriptionKey: 'settings.quality.description', icon: SlidersHorizontal },
-  { id: 'content', labelKey: 'settings.content.label', descriptionKey: 'settings.content.description', icon: Eye },
   { id: 'about', labelKey: 'settings.about.label', descriptionKey: 'settings.about.description', icon: Info }
 ];
 
@@ -81,7 +91,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 }
 
 interface SelectOption { value: string; label: string }
-function SettingSelect({ label, value, options, onChange, disabled = false }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void; disabled?: boolean }) {
+export function SettingSelect({ label, value, options, onChange, disabled = false }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -104,16 +114,22 @@ function SettingSelect({ label, value, options, onChange, disabled = false }: { 
   </div>;
 }
 
-export function SettingsView({ settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, mode, useLocal, restoreRemote, disconnect, localFolder, localLoading, localSongCount, chooseLocalFolder, rescanLocalLibrary, rename, preferences, setPreferences, updateVersion, updateStatus = 'idle', updateProgress = 0, updateError, updateMessage, checkForUpdate, installUpdate }: Props) {
+export function SettingsView({ openServerForm = false, backgroundImage = '', onChooseBackground, onClearBackground, wallpaper = 'none', onWallpaperChange, wallpaperOpacity = DEFAULT_WALLPAPER_OPACITY, onWallpaperOpacityChange, wallpaperBlur = 0, onWallpaperBlurChange, onWallpaperReset, customWallpaperSrc = '', settings, setSettings, connected, password, setPassword, rememberPassword, setRememberPassword, connect, loading, mode, useLocal, restoreRemote, disconnect, localFolder, localLoading, localSongCount, chooseLocalFolder, rescanLocalLibrary, rename, preferences, setPreferences, updateVersion, updateStatus = 'idle', updateProgress = 0, updateError, updateMessage, checkForUpdate, installUpdate }: Props) {
   const { language, setLanguage, t } = useI18n();
-  const [editing, setEditing] = useState(false);
-  const [connectionMode, setConnectionMode] = useState<AppMode>(mode);
+  const [editing, setEditing] = useState(openServerForm);
+  const [connectionMode, setConnectionMode] = useState<AppMode>(openServerForm ? 'server' : mode);
+  const previousConnection = useRef(connected);
   const [section, setSection] = useState<SettingsSection>('connection');
   const [displayedSection, setDisplayedSection] = useState<SettingsSection>('connection');
   const [sectionTransition, setSectionTransition] = useState<'idle' | 'leaving' | 'entering'>('idle');
   const sectionTimer = useRef<number | undefined>(undefined);
-  useEffect(() => { setEditing(false); }, [connected]);
-  useEffect(() => { setConnectionMode(mode); }, [mode]);
+  useEffect(() => {
+    if (connected && connected !== previousConnection.current) {
+      setEditing(false);
+      setConnectionMode('server');
+    }
+    previousConnection.current = connected;
+  }, [connected]);
   useEffect(() => () => { if (sectionTimer.current !== undefined) window.clearTimeout(sectionTimer.current); }, []);
   const update = <K extends keyof Preferences,>(key: K, value: Preferences[K]) => setPreferences({ ...preferences, [key]: value });
   const changeSection = (next: SettingsSection) => {
@@ -149,7 +165,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
           <div className="settings-section-heading"><div><h2 id="connection-heading">{t('settings.connection.label')}</h2><p>{t('settings.connection.subheading')}</p></div>{connectionMode === 'server' && connected && <span className="connection-status"><CheckCircle2 size={16} />{t('settings.connection.connected')}</span>}</div>
           <div className="library-mode-switch" role="group" aria-label={t('local.modeLabel')}>
             <button type="button" className={connectionMode === 'local' ? 'active' : ''} aria-pressed={connectionMode === 'local'} onClick={() => setConnectionMode('local')}><HardDrive size={17} /><span>{t('server.localMode')}</span></button>
-            <button type="button" className={connectionMode === 'server' ? 'active' : ''} aria-pressed={connectionMode === 'server'} onClick={() => { setConnectionMode('server'); if (mode !== 'server') restoreRemote?.(); }}><Server size={17} /><span>{t('server.remoteMode')}</span></button>
+            <button type="button" className={connectionMode === 'server' ? 'active' : ''} aria-pressed={connectionMode === 'server'} onClick={() => setConnectionMode('server')}><Server size={17} /><span>{t('server.remoteMode')}</span></button>
           </div>
 
           {connectionMode === 'local' && <div className="local-library-settings">
@@ -169,7 +185,7 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
                 <SettingRow title={t('settings.connection.serverName')} description={t('settings.connection.serverNameDescription')}><input className="settings-input inline-input" value={connected.serverName || ''} placeholder={serverLabel({ ...connected, serverName: '' })} onChange={(event) => rename(event.target.value)} /></SettingRow>
               </div>
               <div className="settings-group"><SettingRow title={t('settings.connection.savePassword')} description={t('settings.connection.savePasswordDescription')}><Toggle label={t('settings.connection.savePassword')} checked={rememberPassword} onChange={setRememberPassword} /></SettingRow></div>
-              <div className="settings-actions"><button className="secondary-button" onClick={() => setEditing(!editing)}>{editing ? t('settings.connection.hide') : t('settings.connection.edit')}</button><button className="text-button danger-button" onClick={() => { disconnect(); setConnectionMode('local'); setEditing(false); }}>{t('settings.connection.disconnect')}</button></div>
+              <div className="settings-actions">{mode === 'local' && restoreRemote && <button type="button" className="primary-button" disabled={loading} onClick={restoreRemote}>{t('server.restoreRemote', { name: serverLabel(connected) })}</button>}<button className="secondary-button" onClick={() => setEditing(!editing)}>{editing ? t('settings.connection.hide') : t('settings.connection.edit')}</button><button className="text-button danger-button" onClick={() => { disconnect(); setEditing(false); }}>{t('settings.connection.disconnect')}</button></div>
             </>}
             {(!connected || editing) && <form className="settings-form" onSubmit={connect}>
               <div className="form-section-title"><Radio size={17} /><span>{connected ? t('settings.connection.update') : t('settings.connection.connect')}</span></div>
@@ -188,8 +204,21 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
         {displayedSection === 'appearance' && <section className="settings-section" aria-labelledby="appearance-heading">
           <div className="settings-section-heading"><div><h2 id="appearance-heading">{t('settings.appearance.label')}</h2><p>{t('settings.appearance.subheading')}</p></div></div>
           <div className="settings-group">
-            <SettingRow title={t('settings.appearance.theme')} description={t('settings.appearance.themeDescription')}><SettingSelect label={t('settings.appearance.theme')} value={preferences.theme} options={[{ value: 'midnight', label: t('settings.appearance.midnight') }, { value: 'noir', label: t('settings.appearance.noir') }, { value: 'spotify', label: t('settings.appearance.spotify') }]} onChange={(value) => update('theme', value as Preferences['theme'])} /></SettingRow>
-            <SettingRow title={t('settings.appearance.startPage')} description={t('settings.appearance.startPageDescription')}><SettingSelect label={t('settings.appearance.startPage')} value={preferences.startPage} options={[{ value: 'home', label: t('nav.home') }, { value: 'library', label: t('nav.library') }, { value: 'playlists', label: t('common.playlists') }]} onChange={(value) => update('startPage', value as Preferences['startPage'])} /></SettingRow>
+            <SettingRow title={t('settings.appearance.theme')} description={t('settings.appearance.themeDescription')}><SettingSelect label={t('settings.appearance.theme')} value={preferences.theme} options={THEMES.map((theme) => ({ value: theme, label: t(`settings.appearance.${theme}` as any) }))} onChange={(value) => update('theme', value as Preferences['theme'])} /></SettingRow>
+            <div className="wallpaper-section">
+              <h3 className="wallpaper-heading">{t('settings.appearance.wallpaper')}</h3>
+              <div className="wallpaper-options" role="radiogroup" aria-label={t('settings.appearance.wallpaper')}>
+                <button type="button" role="radio" aria-checked={wallpaper === 'none'} className={`wallpaper-option${wallpaper === 'none' ? ' selected' : ''}`} onClick={() => onWallpaperChange?.('none')}><span className="wallpaper-thumb wallpaper-thumb-none" /><span>{t('settings.appearance.wallpaperNone')}</span></button>
+                {(['aurora', 'forest'] as const).map(id => <button key={id} type="button" role="radio" aria-checked={wallpaper === id} className={`wallpaper-option${wallpaper === id ? ' selected' : ''}`} onClick={() => onWallpaperChange?.(id)}><span className="wallpaper-thumb" style={{ backgroundImage: `url("${BUILTIN_WALLPAPERS[id].thumb}")` }} /><span>{t(id === 'aurora' ? 'settings.appearance.wallpaperAurora' : 'settings.appearance.wallpaperForest')}</span></button>)}
+                <span className="wallpaper-custom-wrap">
+                  <button type="button" role="radio" aria-checked={wallpaper === 'custom'} title={t('settings.appearance.backgroundChoose')} className={`wallpaper-option${wallpaper === 'custom' ? ' selected' : ''}`} onClick={() => { if (backgroundImage && wallpaper !== 'custom') onWallpaperChange?.('custom'); else onChooseBackground?.(); }}><span className="wallpaper-thumb wallpaper-thumb-custom" style={customWallpaperSrc ? { backgroundImage: `url("${customWallpaperSrc}")` } : undefined}>{customWallpaperSrc ? null : <Plus size={22} />}</span><span>{t('settings.appearance.wallpaperCustom')}</span></button>
+                  {backgroundImage ? <button type="button" className="wallpaper-clear" aria-label={t('settings.appearance.backgroundClear')} title={t('settings.appearance.backgroundClear')} onClick={onClearBackground}><X size={12} /></button> : null}
+                </span>
+              </div>
+              <SettingRow title={t('settings.appearance.wallpaperOpacity')} description={`${wallpaperOpacity}%`}><input className="wallpaper-slider" type="range" min={0} max={100} step={1} value={wallpaperOpacity} aria-label={t('settings.appearance.wallpaperOpacity')} onChange={event => onWallpaperOpacityChange?.(Number(event.target.value))} /></SettingRow>
+              <SettingRow title={t('settings.appearance.wallpaperBlur')} description={wallpaperBlur > 0 ? `${wallpaperBlur}px` : t('settings.appearance.wallpaperBlurOff')}><input className="wallpaper-slider" type="range" min={0} max={40} step={1} value={wallpaperBlur} aria-label={t('settings.appearance.wallpaperBlur')} onChange={event => onWallpaperBlurChange?.(Number(event.target.value))} /></SettingRow>
+              <div className="settings-actions wallpaper-reset"><button type="button" className="secondary-button" onClick={onWallpaperReset}>{t('settings.appearance.wallpaperReset')}</button></div>
+            </div>
           </div>
         </section>}
 
@@ -204,10 +233,6 @@ export function SettingsView({ settings, setSettings, connected, password, setPa
           <p className="settings-footnote">{t('settings.quality.footnote')}</p>
         </section>}
 
-        {displayedSection === 'content' && <section className="settings-section" aria-labelledby="content-heading">
-          <div className="settings-section-heading"><div><h2 id="content-heading">{t('settings.content.label')}</h2><p>{t('settings.content.subheading')}</p></div></div>
-          <div className="settings-group"><SettingRow title={t('settings.content.showArtists')} description={t('settings.content.showArtistsDescription')}><Toggle label={t('settings.content.showArtists')} checked={preferences.showArtists} onChange={(value) => update('showArtists', value)} /></SettingRow><SettingRow title={t('settings.content.showDurations')} description={t('settings.content.showDurationsDescription')}><Toggle label={t('settings.content.showDurations')} checked={preferences.showDurations} onChange={(value) => update('showDurations', value)} /></SettingRow></div>
-        </section>}
 
         {displayedSection === 'about' && <section className="settings-section" aria-labelledby="about-heading">
           <div className="settings-section-heading"><div><h2 id="about-heading">{t('settings.about.label')}</h2><p>{t('settings.about.subheading')}</p></div></div>

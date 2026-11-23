@@ -82,7 +82,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       local_library::pick_local_library_folder,
       local_library::scan_local_library,
-      local_library::read_local_lyrics
+      local_library::read_local_lyrics,
+      local_library::pick_background_image
     ])
     .run(tauri::generate_context!())
     .expect("error while building tauri application");

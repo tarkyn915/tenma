@@ -29,12 +29,30 @@ async function requestJson(url: string): Promise<unknown> {
   return response.json();
 }
 
-function pickBest(entries: LrcLibEntry[], song: Pick<Song, 'duration'>): LrcLibEntry | undefined {
-  const candidates = entries.filter((entry) => !entry.instrumental && (entry.syncedLyrics?.trim() || entry.plainLyrics?.trim()));
+// Compare titles/artists loosely (case, spacing, punctuation) so a Chinese song
+// never ends up with the lyrics of a same-named English song.
+const normalize = (value?: string) => (value || '').toLowerCase().replace(/[\s\-_·、，。！？!?,.'"()（）\[\]【】]/g, '');
+
+function pickBest(entries: LrcLibEntry[], song: Pick<Song, 'title' | 'artist' | 'duration'>): LrcLibEntry | undefined {
+  const wantTitle = normalize(song.title);
+  const wantArtist = normalize(song.artist);
+  const candidates = entries.filter((entry) => {
+    if (entry.instrumental) return false;
+    if (!(entry.syncedLyrics?.trim() || entry.plainLyrics?.trim())) return false;
+    const gotTitle = normalize(entry.trackName);
+    // Drop candidates whose title shares nothing with the requested song.
+    if (gotTitle && wantTitle && gotTitle !== wantTitle && !gotTitle.includes(wantTitle) && !wantTitle.includes(gotTitle)) return false;
+    return true;
+  });
   if (!candidates.length) return undefined;
-  const score = (entry: LrcLibEntry) =>
-    (entry.syncedLyrics?.trim() ? 2 : 1) +
-    (song.duration && entry.duration && Math.abs(entry.duration - song.duration) < 3 ? 1 : 0);
+  const score = (entry: LrcLibEntry) => {
+    const title = normalize(entry.trackName);
+    const artist = normalize(entry.artistName);
+    return (title === wantTitle ? 4 : 0) +
+      (wantArtist && artist && (artist === wantArtist || artist.includes(wantArtist) || wantArtist.includes(artist)) ? 3 : 0) +
+      (entry.syncedLyrics?.trim() ? 2 : 1) +
+      (song.duration && entry.duration && Math.abs(entry.duration - song.duration) < 3 ? 1 : 0);
+  };
   return [...candidates].sort((left, right) => score(right) - score(left))[0];
 }
 

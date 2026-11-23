@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, LoaderCircle, MoreHorizontal, Pause, Play, Repeat, Shuffle, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useLyricClock } from './useLyricClock';
+import { ChevronDown, LoaderCircle, Minus, MoreHorizontal, Pause, Play, Plus, Repeat, RotateCcw, Shuffle, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { SettingSelect } from './SettingsView';
 import type { LyricsResult, PlayerTrack, Playlist, Song } from './types';
 import { cn, formatTime, coverFallback } from './utils';
 import { parseLyricsText } from './lyrics';
@@ -11,6 +13,7 @@ import { errorContent, resolveMessage, useI18n } from './i18n';
 import type { MessageContent } from './i18n';
 
 interface Props {
+  audioRef: RefObject<HTMLAudioElement>;
   track?: PlayerTrack;
   queue: PlayerTrack[];
   queueIndex: number;
@@ -41,6 +44,10 @@ interface Props {
   canOpenAlbum?: (song: Song) => boolean;
 }
 
+function lyricScrollTop(list: HTMLElement, line: HTMLElement) {
+  return line.offsetTop + line.offsetHeight / 2 - list.clientHeight * 0.42;
+}
+
 function Artwork({ src, alt, className }: { src?: string; alt: string; className?: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
@@ -48,13 +55,27 @@ function Artwork({ src, alt, className }: { src?: string; alt: string; className
   return <img className={cn('now-playing-art', className)} src={src} alt={alt} onError={() => setFailed(true)} />;
 }
 
-export function NowPlayingView({ track, queue, queueIndex, playing, currentTime, duration, volume, muted, shuffle, repeat, closing, api, onClose, onToggle, onPrevious, onNext, onSeek, onVolume, onMute, onShuffle, onRepeat, onQueueSelect, playlists, onAddToPlaylist, addingSongId, onArtist, onAlbum, canOpenAlbum }: Props) {
+export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, currentTime, duration, volume, muted, shuffle, repeat, closing, api, onClose, onToggle, onPrevious, onNext, onSeek, onVolume, onMute, onShuffle, onRepeat, onQueueSelect, playlists, onAddToPlaylist, addingSongId, onArtist, onAlbum, canOpenAlbum }: Props) {
   const { t } = useI18n();
   const [tab, setTab] = useState<'queue' | 'lyrics'>('queue');
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [lyricsError, setLyricsError] = useState<MessageContent>('');
+  const [lyricsSource, setLyricsSource] = useState<'auto' | 'local' | 'server' | 'online'>('auto');
+  // Lyrics offset is remembered per song (tenma.lyricsOffset.<id>), clamped to ±30s.
+  const offsetKey = `tenma.lyricsOffset.${track?.id ?? ''}`;
+  const readOffset = () => { try { const n = Number(globalThis.localStorage?.getItem(offsetKey) || 0); return Number.isFinite(n) ? n : 0; } catch { return 0; } };
+  const [lyricsOffset, setLyricsOffsetState] = useState(readOffset);
+  const [offsetDraft, setOffsetDraft] = useState<string | null>(null);
+  useEffect(() => { setLyricsOffsetState(readOffset()); setOffsetDraft(null); }, [offsetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setLyricsOffset = (next: number | ((value: number) => number)) => setLyricsOffsetState((value) => {
+    const raw = typeof next === 'function' ? next(value) : next;
+    const clamped = Math.round(Math.min(30, Math.max(-30, raw)) * 100) / 100;
+    try { if (clamped) globalThis.localStorage?.setItem(offsetKey, String(clamped)); else globalThis.localStorage?.removeItem(offsetKey); } catch { /* optional */ }
+    return clamped;
+  });
+  const commitOffsetDraft = () => { if (offsetDraft === null) return; const n = Number(offsetDraft.replace(/s$/i, '').trim()); if (offsetDraft.trim() !== '' && Number.isFinite(n)) setLyricsOffset(n); setOffsetDraft(null); };
   const lyricsListRef = useRef<HTMLDivElement>(null);
   const lyricsScrollFrame = useRef(0);
   const animateLyricsScroll = (target: number) => {
@@ -65,9 +86,14 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
     const delta = target - start;
     if (Math.abs(delta) < 2) { list.scrollTop = target; return; }
     const duration = Math.min(260 + Math.abs(delta) * 0.35, 620);
-    const startTime = performance.now();
+    let startTime: number | undefined;
+    // Frame-count fallback keeps the animation finite in headless test environments.
+    const maxFrames = Math.round(duration / 16) + 8;
+    let frame = 0;
     const step = (now: number) => {
-      const progress = Math.min((now - startTime) / duration, 1);
+      startTime ??= now;
+      frame++;
+      const progress = Math.max(Math.min((now - startTime) / duration, 1), Math.min(frame / maxFrames, 1));
       const eased = progress < .5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
       list.scrollTop = start + delta * eased;
       if (progress < 1) lyricsScrollFrame.current = requestAnimationFrame(step);
@@ -76,14 +102,7 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
   };
   useEffect(() => () => cancelAnimationFrame(lyricsScrollFrame.current), []);
   const total = Number.isFinite(duration) && duration > 0 ? duration : track?.duration || 0;
-  const activeLine = useMemo(() => {
-    if (!lyrics?.synced) return -1;
-    let active = -1;
-    lyrics.lines.forEach((line, index) => {
-      if (line.start !== undefined && line.start <= currentTime) active = index;
-    });
-    return active;
-  }, [currentTime, lyrics]);
+  const { activeLine, textRef } = useLyricClock(audioRef, lyrics, total, lyricsOffset, tab === 'lyrics' && !closing, playing);
 
   // Smoothly follow the active synced line, Kopuz-style, with a continuous easing
   // animation instead of the browser's interruptible smooth scroll (which stutters
@@ -93,7 +112,7 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
     const list = lyricsListRef.current;
     const line = list?.querySelector<HTMLElement>('.lyrics-line.active');
     if (!list || !line) return;
-    animateLyricsScroll(line.offsetTop - list.clientHeight / 2 + line.clientHeight / 2);
+    animateLyricsScroll(lyricScrollTop(list, line));
   }, [activeLine]);
 
   // Opening the lyrics tab snaps straight to the playing line.
@@ -102,7 +121,7 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
     const list = lyricsListRef.current;
     const line = list?.querySelector<HTMLElement>('.lyrics-line.active');
     if (!list || !line) return;
-    list.scrollTop = line.offsetTop - list.clientHeight / 2 + line.clientHeight / 2;
+    list.scrollTop = lyricScrollTop(list, line);
   }, [tab]);
 
   useEffect(() => {
@@ -115,16 +134,21 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
       setLyricsLoading(true);
       try {
         let result: LyricsResult | null = null;
-        if (api) {
-          result = await api.lyrics(track);
-        } else if (track.localPath && isTauri()) {
-          // Local files: embedded lyrics first, then a sibling .lrc file.
+        const loadLocal = async () => {
+          if (!track.localPath || !isTauri()) return null;
           const text = await invoke<string | null>('read_local_lyrics', { path: track.localPath });
-          result = text ? parseLyricsText(text) : null;
-        }
-        if (!result?.lines.length) {
-          // Nothing embedded or served: fall back to the online lyrics database.
+          return text ? parseLyricsText(text) : null;
+        };
+        if (lyricsSource === 'local') {
+          result = await loadLocal();
+        } else if (lyricsSource === 'server') {
+          result = api ? await api.lyrics(track) : null;
+        } else if (lyricsSource === 'online') {
           result = await fetchOnlineLyrics(track);
+        } else {
+          if (api) result = await api.lyrics(track);
+          else result = await loadLocal();
+          if (!result?.lines.length) result = await fetchOnlineLyrics(track);
         }
         if (!cancelled) setLyrics(result);
       } catch (error) {
@@ -135,10 +159,11 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
     };
     void load();
     return () => { cancelled = true; };
-  }, [api, track?.id]);
+  }, [api, track?.id, lyricsSource]);
 
   if (!track) return null;
   return <section className={cn('now-playing-screen', closing && 'leaving')} aria-label={t('nowPlaying.title')}>
+    <div key={track.coverArt || 'none'} className="now-playing-backdrop" aria-hidden="true" style={track.coverArt ? { backgroundImage: `url("${track.coverArt}")` } : undefined} />
     <div className="now-playing-surface">
       <header className="now-playing-toolbar">
         <button className="icon-button" aria-label={t('nowPlaying.close')} onClick={onClose}><ChevronDown size={24} /></button>
@@ -173,7 +198,18 @@ export function NowPlayingView({ track, queue, queueIndex, playing, currentTime,
               </button>)}
             </div>
           </div> : <div className="lyrics-panel">
-            {lyricsLoading ? <div className="lyrics-state"><LoaderCircle className="spin" size={21} />{t('nowPlaying.loadingLyrics')}</div> : lyricsError ? <div className="lyrics-state"><p>{resolveMessage(lyricsError, t)}</p></div> : lyrics?.lines.length ? <div ref={lyricsListRef} className={cn('lyrics-list', lyrics.synced && 'synced')}>{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}{lyrics.lines.map((line, index) => { const distance = activeLine < 0 ? 0 : Math.abs(index - activeLine); return <button key={`${index}-${line.text}`} className={cn('lyrics-line', index === activeLine ? 'active' : distance <= 1 ? 'adjacent' : distance === 2 ? 'second' : 'distant')} disabled={line.start === undefined} onClick={() => line.start !== undefined && onSeek(line.start)}>{line.text}</button>; })}{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}</div> : <div className="lyrics-state"><p>{api || track.localPath ? t('nowPlaying.noLyrics') : t('nowPlaying.connectLyrics')}</p></div>}
+            <div className="lyrics-tools">
+              <SettingSelect label={t('nowPlaying.lyricsSource')} value={lyricsSource} options={[{ value: 'auto', label: t('nowPlaying.sourceAuto') }, { value: 'local', label: t('nowPlaying.sourceLocal') }, { value: 'server', label: t('nowPlaying.sourceServer') }, { value: 'online', label: t('nowPlaying.sourceOnline') }]} onChange={(value) => setLyricsSource(value as typeof lyricsSource)} />
+              <div className={`lyrics-offset${lyricsOffset ? ' nonzero' : ''}`} aria-label={t('nowPlaying.lyricsOffset')}>
+                <button type="button" aria-label={t('nowPlaying.offsetBack')} onClick={() => setLyricsOffset((value) => value - 0.5)}><Minus size={14} /></button>
+                <input className="lyrics-offset-input" type="text" inputMode="decimal" aria-label={t('nowPlaying.lyricsOffset')} value={offsetDraft ?? `${lyricsOffset > 0 ? '+' : ''}${Number.isInteger(lyricsOffset * 10) ? lyricsOffset.toFixed(1) : lyricsOffset.toFixed(2)}s`} onFocus={(event) => { setOffsetDraft(String(lyricsOffset)); requestAnimationFrame(() => event.target.select()); }} onChange={(event) => setOffsetDraft(event.target.value)} onBlur={commitOffsetDraft} onKeyDown={(event) => { if (event.key === 'Enter') { commitOffsetDraft(); event.currentTarget.blur(); } else if (event.key === 'Escape') { setOffsetDraft(null); requestAnimationFrame(() => (event.target as HTMLInputElement).blur()); } }} />
+                <button type="button" aria-label={t('nowPlaying.offsetForward')} onClick={() => setLyricsOffset((value) => value + 0.5)}><Plus size={14} /></button>
+                {lyricsOffset ? <button type="button" className="lyrics-offset-reset" aria-label={t('nowPlaying.offsetReset')} title={t('nowPlaying.offsetReset')} onClick={() => setLyricsOffset(0)}><RotateCcw size={13} /></button> : null}
+              </div>
+            </div>
+            {lyricsLoading ? <div className="lyrics-state"><LoaderCircle className="spin" size={21} />{t('nowPlaying.loadingLyrics')}</div> : lyricsError ? <div className="lyrics-state"><p>{resolveMessage(lyricsError, t)}</p></div> : lyrics?.lines.length ? <div ref={lyricsListRef} className={cn('lyrics-list', lyrics.synced && 'synced')}>{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}{lyrics.lines.map((line, index) => { const distance = activeLine < 0 ? 0 : Math.abs(index - activeLine); const isActive = index === activeLine; return <button key={`${index}-${line.text}`} className={cn('lyrics-line', isActive ? 'active' : distance <= 1 ? 'adjacent' : distance === 2 ? 'second' : distance <= 6 ? 'distant' : 'far')} disabled={line.start === undefined} onClick={() => line.start !== undefined && onSeek(line.start)}>
+                <span className="lyrics-line-text" ref={isActive ? textRef : undefined}>{line.text}</span>
+              </button>; })}{lyrics.synced && <div className="lyrics-spacer" aria-hidden="true" />}</div> : <div className="lyrics-state"><p>{api || track.localPath ? t('nowPlaying.noLyrics') : t('nowPlaying.connectLyrics')}</p></div>}
           </div>}
         </div>
       </div>

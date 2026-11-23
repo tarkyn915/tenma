@@ -117,6 +117,22 @@ fn lyrics_for_song(file: &Path) -> Result<Option<String>, String> {
   Ok(None)
 }
 
+/// Lets the user pick a background image and grants the asset protocol access to it.
+#[tauri::command]
+pub fn pick_background_image(app: AppHandle) -> Option<String> {
+  let path = app
+    .dialog()
+    .file()
+    .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+    .blocking_pick_file()?
+    .into_path()
+    .ok()?;
+  if let Some(parent) = path.parent() {
+    let _ = app.asset_protocol_scope().allow_directory(parent, false);
+  }
+  Some(path.to_string_lossy().into_owned())
+}
+
 fn display_folder(path: &Path) -> String {
   let value = path.to_string_lossy().into_owned();
   #[cfg(windows)]

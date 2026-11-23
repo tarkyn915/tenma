@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
+import { isTauri, invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event';
 import { Album as AlbumIcon, Check, ChevronDown, ChevronLeft, ChevronRight, Dices, Disc3, Home, Library, ListMusic, LoaderCircle, Menu, Minus, MoreVertical, Music2, Pause, Play, Plus, Repeat, Search, Server, Settings, Shuffle, SkipBack, SkipForward, Square, Users, Volume2, VolumeX, X } from 'lucide-react';
@@ -7,8 +7,11 @@ import { NavidromeApi } from './api';
 import { emptyLocalAlbums, emptyLocalPlaylists, emptyLocalSongs, localAlbumsFromSongs, pickLocalLibraryFolder, scanLocalLibrary, searchLocalLibrary } from './localLibrary';
 import type { Album, AppMode, ConnectionSettings, Playlist, PlayerTrack, SearchResults, Song } from './types';
 import { cn, coverFallback, formatTime } from './utils';
+import { perceivedVolume, fadeAudio } from './audioFades';
 import { queueAroundTrack, shuffledItems } from './playback';
 import { albumForSong, groupArtists } from './musicNavigation';
+import { BUILTIN_WALLPAPERS, DEFAULT_WALLPAPER_BLUR, DEFAULT_WALLPAPER_OPACITY, isWallpaperId } from './wallpapers';
+import type { WallpaperId } from './wallpapers';
 
 import { SettingsView, loadPreferences, serverLabel } from './SettingsView';
 import type { Page } from './SettingsView';
@@ -16,6 +19,7 @@ import { PlaylistsView } from './PlaylistsView';
 import { NowPlayingView } from './NowPlayingView';
 import { BalancedGrid } from './BalancedGrid';
 import { TrackContextMenu } from './TrackContextMenu';
+import { PlaylistEditor } from './PlaylistEditor';
 import { I18nContext, errorContent, loadLanguage, resolveMessage, saveLanguage, translate, useI18n } from './i18n';
 import type { Language, MessageContent, TranslationKey } from './i18n';
 
@@ -28,11 +32,12 @@ const storageGet = (key: string) => { try { return globalThis.localStorage?.getI
 const storageSet = (key: string, value: string) => { try { globalThis.localStorage?.setItem(key, value); } catch { /* Optional browser storage must not block the app. */ } };
 const storageRemove = (key: string) => { try { globalThis.localStorage?.removeItem(key); } catch { /* Optional browser storage must not block the app. */ } };
 
-const storedSettings: ConnectionSettings = {
+const reconnectPausedKey = 'tenma.remoteReconnectPaused';
+const storedSettings = (): ConnectionSettings => ({
   serverName: storageGet('northstar.serverName'),
   server: storageGet('northstar.server'),
   username: storageGet('northstar.username')
-};
+});
 
 function Cover({ src, alt, className = '' }: { src?: string; alt: string; className?: string }) {
   const [failed, setFailed] = useState(false);
@@ -40,11 +45,15 @@ function Cover({ src, alt, className = '' }: { src?: string; alt: string; classN
   return failed || !src ? <div className={cn('cover-fallback', className)} style={{ background: coverFallback(alt) }}><Disc3 size={30} /></div> : <img className={className} src={src} alt={alt} onError={() => setFailed(true)} />;
 }
 
-function AlbumCard({ album, onOpen }: { album: Album; onOpen: (album: Album) => void }) {
-  return <button className="album-card" onClick={() => onOpen(album)}>
-    <div className="album-art-wrap"><Cover src={album.coverArt} alt={album.name} className="album-art" /><span className="play-overlay"><Play fill="currentColor" size={18} /></span></div>
-    <span className="album-name">{album.name}</span><span className="album-artist">{album.artist}</span>
-  </button>;
+function AlbumCard({ album, onOpen, onArtist }: { album: Album; onOpen: (album: Album) => void; onArtist?: (name: string, artistId?: string) => void }) {
+  const { t } = useI18n();
+  return <div className="album-card" onClick={() => onOpen(album)}>
+    <button type="button" className="album-card-open" onClick={(event) => { event.stopPropagation(); onOpen(album); }}>
+      <span className="album-art-wrap"><Cover src={album.coverArt} alt={album.name} className="album-art" /><span className="play-overlay"><Play fill="currentColor" size={18} /></span></span>
+      <span className="album-name">{album.name}</span>
+    </button>
+    <span className="album-artist"><MetadataLink label={t('artists.view', { name: album.artist })} onOpen={album.artist.trim() && onArtist ? () => onArtist(album.artist, album.artistId) : undefined}>{album.artist}</MetadataLink></span>
+  </div>;
 }
 
 function WindowControls({ onClose }: { onClose: () => Promise<void> }) {
@@ -91,17 +100,35 @@ function AppContent() {
   const { t } = useI18n();
   const [mode, setMode] = useState<AppMode>('local');
   const [localFolder, setLocalFolder] = useState(() => storageGet('tenma.localLibraryPath'));
+  const [backgroundImage, setBackgroundImage] = useState(() => storageGet('tenma.backgroundImage'));
+  const chooseBackground = async () => {
+    if (!isTauri()) return;
+    try {
+      const path = await invoke<string | null>('pick_background_image');
+      if (path) { storageSet('tenma.backgroundImage', path); setBackgroundImage(path); changeWallpaper('custom'); }
+    } catch { /* Optional background selection must not break the app. */ }
+  };
+  const [wallpaper, setWallpaperState] = useState<WallpaperId>(() => { const v = storageGet('tenma.wallpaper'); return isWallpaperId(v) ? v : (storageGet('tenma.backgroundImage') ? 'custom' : 'none'); });
+  const readNumber = (key: string, fallback: number) => { const raw = storageGet(key); const n = Number(raw); return raw !== '' && Number.isFinite(n) ? n : fallback; };
+  const [wallpaperOpacity, setWallpaperOpacityState] = useState(() => readNumber('tenma.wallpaperOpacity', DEFAULT_WALLPAPER_OPACITY));
+  const [wallpaperBlur, setWallpaperBlurState] = useState(() => readNumber('tenma.wallpaperBlur', DEFAULT_WALLPAPER_BLUR));
+  const changeWallpaper = (id: WallpaperId) => { storageSet('tenma.wallpaper', id); setWallpaperState(id); };
+  const changeWallpaperOpacity = (v: number) => { storageSet('tenma.wallpaperOpacity', String(v)); setWallpaperOpacityState(v); };
+  const changeWallpaperBlur = (v: number) => { storageSet('tenma.wallpaperBlur', String(v)); setWallpaperBlurState(v); };
+  const resetWallpaper = () => { changeWallpaperOpacity(DEFAULT_WALLPAPER_OPACITY); changeWallpaperBlur(DEFAULT_WALLPAPER_BLUR); };
+  const clearBackground = () => { storageSet('tenma.backgroundImage', ''); setBackgroundImage(''); if (wallpaper === 'custom') changeWallpaper('none'); };
   const [localSongs, setLocalSongs] = useState<Song[]>(emptyLocalSongs);
   const [localLoading, setLocalLoading] = useState(false);
   const localRequest = useRef(0);
   const [preferences, setPreferences] = useState(loadPreferences);
-  const [navigation, setNavigation] = useState<{ pages: Page[]; index: number }>(() => ({ pages: [loadPreferences().startPage], index: 0 }));
+  const [navigation, setNavigation] = useState<{ pages: Page[]; index: number }>(() => ({ pages: ['home'], index: 0 }));
   const [connectedSettings, setConnectedSettings] = useState<ConnectionSettings | null>(null);
   const [playlists, setPlaylists] = useState<Playlist[]>(emptyLocalPlaylists);
   const [playlistsError, setPlaylistsError] = useState<MessageContent>('');
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [playlistSongAdding, setPlaylistSongAdding] = useState('');
+  const [playlistSongRemoving, setPlaylistSongRemoving] = useState('');
   const [playlistLoading, setPlaylistLoading] = useState(false);
   const [playlistError, setPlaylistError] = useState<MessageContent>('');
   const playlistRequest = useRef(0);
@@ -166,6 +193,7 @@ function AppContent() {
   const [libraryHasNext, setLibraryHasNext] = useState(false);
   const librarySongRequest = useRef(0);
   const [loading, setLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success' | 'info'; text: MessageContent } | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle');
@@ -175,11 +203,18 @@ function AppContent() {
   const [settings, setSettings] = useState(storedSettings);
   const [rememberPassword, setRememberPasswordState] = useState(() => storageGet('northstar.rememberPassword') === 'true');
   const [password, setPassword] = useState(() => storageGet('northstar.rememberPassword') === 'true' ? storageGet('northstar.password') : '');
-  const [isConnected, setIsConnected] = useState(false);
+  // The switcher restores a verified login, never the partially edited form.
+  const lastLogin = useRef({ settings, password });
   const [closePromptOpen, setClosePromptOpen] = useState(false);
   const [rememberCloseChoice, setRememberCloseChoice] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  const [playlistContextMenu, setPlaylistContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [createPlaylistOpen, setCreatePlaylistOpen] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+  const [editingPlaylist, setEditingPlaylist] = useState<Playlist | null>(null);
+  const playlistsRefreshRequest = useRef(0);
   const [connectionViewKey, setConnectionViewKey] = useState(0);
   const serverSwitcherRef = useRef<HTMLDivElement>(null);
   const serverButtonRef = useRef<HTMLButtonElement>(null);
@@ -198,6 +233,10 @@ function AppContent() {
   const currentTrack = currentIndex >= 0 ? queue[currentIndex] : undefined;
 
   useEffect(() => {
+    setEditingPlaylist(null); setCreatePlaylistOpen(false); setCreatingPlaylist(false); setPlaylistContextMenu(null);
+  }, [api]);
+
+  useEffect(() => {
     if (!serverMenuOpen) return;
     const dismiss = (event: PointerEvent) => {
       if (!serverSwitcherRef.current?.contains(event.target as Node)) setServerMenuOpen(false);
@@ -209,6 +248,18 @@ function AppContent() {
     document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); };
   }, [serverMenuOpen]);
+
+  useEffect(() => {
+    if (!playlistContextMenu) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.playlist-context-menu')) setPlaylistContextMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPlaylistContextMenu(null); };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); };
+  }, [playlistContextMenu]);
 
   const requestWindowClose = async (choice?: 'background' | 'quit') => {
     const currentWindow = getCurrentWindow();
@@ -255,7 +306,7 @@ function AppContent() {
     setVolume(next);
   };
   const toggleMute = () => {
-    if (muted || volume === 0) { const restored = lastVolume.current || 0.78; setMuted(false); setVolume(restored); }
+    if (muted || volume === 0) { const restored = lastVolume.current || 0.3; setMuted(false); setVolume(restored); }
     else { lastVolume.current = volume; setMuted(true); setVolume(0); }
   };
 
@@ -297,8 +348,8 @@ function AppContent() {
   const setRememberPassword = (value: boolean) => {
     setRememberPasswordState(value);
     storageSet('northstar.rememberPassword', String(value));
-    if (!value) { storageRemove('northstar.password'); setPassword(''); }
-    else if (password) storageSet('northstar.password', password);
+    if (!value) storageRemove('northstar.password');
+    else if (lastLogin.current.password) storageSet('northstar.password', lastLogin.current.password);
   };
 
   useEffect(() => {
@@ -323,38 +374,50 @@ function AppContent() {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
-    setCurrentTime(0); setDuration(0);
-    audio.src = currentTrack.streamUrl || '';
-    audio.volume = volume;
-    audio.load();
-    audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    let cancelled = false;
+    fadeAudio(audio, 0, 150, () => {
+      if (cancelled) return;
+      setCurrentTime(0); setDuration(0);
+      audio.src = currentTrack.streamUrl || '';
+      audio.volume = perceivedVolume(volume);
+      audio.load();
+      audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    });
+    return () => { cancelled = true; };
   }, [currentTrack]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.volume = volume;
+    fadeAudio(audio, perceivedVolume(volume), 120);
   }, [volume]);
 
   const connect = (event: React.FormEvent) => {
     event.preventDefault();
     void establishConnection(settings, password);
   };
-  // Switching back to the remote source (sidebar menu or settings) reconnects
-  // automatically with the remembered credentials instead of asking to sign in again.
   const restoreRemoteConnection = () => {
-    if (mode === 'server' || !settings.server || !settings.username) return;
-    if (!password) { nav('settings'); return; }
-    void establishConnection(settings, password);
+    const login = lastLogin.current;
+    if (mode === 'server' || connecting) return;
+    if (!login.password) { openConnectionSettings(); return; }
+    void establishConnection(login.settings, login.password);
   };
-  // Reconnect automatically on startup when credentials are remembered, so the
-  // user does not have to sign in again after restarting the app.
   useEffect(() => {
-    if (settings.server && settings.username && password) void establishConnection(settings, password);
-    // Intentionally runs once on mount.
+    const login = lastLogin.current;
+    if (storageGet(reconnectPausedKey) || !login.settings.server || !login.settings.username || !login.password) return;
+    const timer = window.setTimeout(() => { void establishConnection(login.settings, login.password); }, 0);
+    return () => { window.clearTimeout(timer); sessionRequest.current++; };
   }, []);
+  const cancelPendingConnection = () => {
+    if (connecting) { sessionRequest.current++; setConnecting(false); }
+  };
+  const editConnection = (next: ConnectionSettings) => {
+    cancelPendingConnection();
+    if (next.server !== settings.server || next.username !== settings.username) setPassword('');
+    setSettings(next);
+  };
   const establishConnection = async (credentials: ConnectionSettings, secret: string) => {
-    setLoading(true); setMessage(null);
+    setConnecting(true); setMessage(null);
     const session = ++sessionRequest.current;
     localRequest.current++; setLocalLoading(false);
     const nextApi = new NavidromeApi(credentials, secret);
@@ -366,6 +429,7 @@ function AppContent() {
         nextApi.playlists().then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Playlist[], error: errorContent(error, 'error.loadPlaylists') })),
         nextApi.randomSongs(9).then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Song[], error: errorContent(error, 'error.loadRandomSongs') }))
       ]);
+      if (session !== sessionRequest.current) return;
       if (all.value.length) nextApi.setAlbumIndex(all.value);
       const songs = await nextApi.songsPage(0, LIBRARY_PAGE_SIZE, all.value).then((value) => ({ value, error: '' })).catch((error: unknown) => ({ value: [] as Song[], error: errorContent(error, 'error.songListUnavailable') }));
       if (session !== sessionRequest.current) return;
@@ -382,7 +446,9 @@ function AppContent() {
       setRandomSongs(random.value); setRandomError(random.error); setPlaylists(lists.value); setPlaylistsError(lists.error ? { key: 'error.playlistsRefresh', values: { error: lists.error } } : '');
       // Keep the password in memory for this session even when local saving is
       // disabled, so enabling the toggle after a successful connection works.
-      setIsConnected(true); setConnectedSettings(saved); setSettings(saved);
+      lastLogin.current = { settings: saved, password: secret };
+      setConnectedSettings(saved); setSettings(saved); setPassword(secret);
+      storageRemove(reconnectPausedKey);
       storageSet('northstar.server', saved.server); storageSet('northstar.username', saved.username); storageSet('northstar.serverName', saved.serverName);
       storageSet('northstar.rememberPassword', String(rememberPassword));
       if (rememberPassword) storageSet('northstar.password', secret); else storageRemove('northstar.password');
@@ -397,7 +463,7 @@ function AppContent() {
         ? { key: 'error.connectedWithErrors', values: { name: saved.serverName, errors } }
         : { key: 'error.connected', values: { name: saved.serverName } } });
     } catch (error) { if (session === sessionRequest.current) setMessage({ type: 'error', text: errorContent(error, 'error.connection') }); }
-    finally { if (session === sessionRequest.current) setLoading(false); }
+    finally { if (session === sessionRequest.current) setConnecting(false); }
   };
 
   const applyLocalSongs = (songs: Song[]) => {
@@ -411,7 +477,8 @@ function AppContent() {
   // and current playback alive; "Disconnect" performs the full teardown instead.
   const useLocalMode = (notify = true) => {
     sessionRequest.current++; playlistRequest.current++; albumRequest.current++; artistRequest.current++; randomRequest.current++;
-    setLoading(false); setLocalLoading(false);
+    storageSet(reconnectPausedKey, '1');
+    setConnecting(false); setLoading(false); setLocalLoading(false);
     setMode('local'); setApi(null); applyLocalSongs(localSongs);
     setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setQuery('');
     resetDetailHistory();
@@ -421,12 +488,14 @@ function AppContent() {
     sessionRequest.current++; playlistRequest.current++; albumRequest.current++; artistRequest.current++; randomRequest.current++;
     audioRef.current?.pause(); if (audioRef.current) { audioRef.current.removeAttribute('src'); audioRef.current.load(); }
     originalQueue.current = [];
-    setPlaying(false); setLoading(false); setQueue([]); setCurrentIndex(-1); setCurrentTime(0); setDuration(0); setShowQueue(false);
+    storageSet(reconnectPausedKey, '1');
+    setPlaying(false); setConnecting(false); setLoading(false); setQueue([]); setCurrentIndex(-1); setCurrentTime(0); setDuration(0); setShowQueue(false);
     setMode('local'); setApi(null); applyLocalSongs(localSongs);
-    setIsConnected(false); setConnectedSettings(null); setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setQuery('');
+    setConnectedSettings(null); setSelectedAlbum(null); setSelectedPlaylist(null); setSelectedArtist(null); setQuery('');
     resetDetailHistory();
-    if (!rememberPassword) setPassword('');
-    setMessage({ type: 'success', text: { key: 'message.localMode' } });
+    if (!rememberPassword) lastLogin.current.password = '';
+    setSettings(lastLogin.current.settings); setPassword(lastLogin.current.password);
+    setMessage({ type: 'success', text: { key: 'message.disconnected' } });
   };
   const loadLocalLibrary = async (folder: string, notify = false) => {
     if (!folder || !isTauri()) return;
@@ -455,16 +524,76 @@ function AppContent() {
   useEffect(() => { if (localFolder && isTauri()) void loadLocalLibrary(localFolder); }, []);
   const renameServer = (name: string) => {
     setConnectedSettings((current) => current ? { ...current, serverName: name } : null);
+    lastLogin.current.settings = { ...lastLogin.current.settings, serverName: name };
     setSettings((current) => ({ ...current, serverName: name }));
     storageSet('northstar.serverName', name);
+  };
+  const createPlaylist = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newPlaylistName.trim();
+    const activeApi = api;
+    if (!activeApi || !name || creatingPlaylist) return;
+    const session = sessionRequest.current;
+    setCreatingPlaylist(true);
+    try {
+      await activeApi.createPlaylist(name);
+      if (session !== sessionRequest.current || activeApi !== api) return;
+      setNewPlaylistName(''); setCreatePlaylistOpen(false);
+      setMessage({ type: 'success', text: { key: 'message.playlistCreated', values: { name } } });
+      void refreshPlaylists();
+    } catch (error) {
+      if (session === sessionRequest.current) setMessage({ type: 'error', text: errorContent(error, 'error.createPlaylist') });
+    } finally { if (session === sessionRequest.current) setCreatingPlaylist(false); }
+  };
+  const openPlaylistCreation = () => {
+    setPlaylistContextMenu(null);
+    if (!api) { setMessage({ type: 'info', text: { key: 'playlists.connectToCreate' } }); return; }
+    setNewPlaylistName(''); setCreatePlaylistOpen(true);
+  };
+  const openPlaylistContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    setPlaylistContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 80)) });
+  };
+  const renamePlaylist = async (playlist: Playlist, name: string) => {
+    if (!api) return;
+    const session = sessionRequest.current;
+    await api.renamePlaylist(playlist.id, name);
+    if (session !== sessionRequest.current) return;
+    playlistsRefreshRequest.current++; setPlaylistsLoading(false);
+    const renamed = (item: Playlist) => item.id === playlist.id ? { ...item, name } : item;
+    setPlaylists((current) => current.map(renamed));
+    setSelectedPlaylist((current) => current ? renamed(current) : current);
+    for (const snapshot of detailHistory.current.values()) if (snapshot.playlist) snapshot.playlist = renamed(snapshot.playlist);
+    setEditingPlaylist(null);
+    setMessage({ type: 'success', text: { key: 'message.playlistRenamed', values: { name } } });
+  };
+  const deletePlaylist = async (playlist: Playlist) => {
+    if (!api) return;
+    const session = sessionRequest.current;
+    await api.deletePlaylist(playlist.id);
+    if (session !== sessionRequest.current) return;
+    playlistsRefreshRequest.current++; playlistRequest.current++; setPlaylistsLoading(false);
+    setPlaylists((current) => current.filter((item) => item.id !== playlist.id));
+    setSelectedPlaylist(null); setPlaylistLoading(false); setPlaylistError('');
+    const removedPages = new Set<number>();
+    for (const [index, snapshot] of detailHistory.current) {
+      if (snapshot.playlist?.id !== playlist.id) continue;
+      snapshot.playlist = null;
+      if (navigation.pages[index] === 'playlist') removedPages.add(index);
+    }
+    if (page === 'playlist') removedPages.add(navigation.index);
+    setEditingPlaylist(null);
+    setNavigation((current) => ({ ...current, pages: current.pages.map((entry, index) => removedPages.has(index) ? 'playlists' : entry) }));
+    setMessage({ type: 'success', text: { key: 'message.playlistDeleted', values: { name: playlist.name } } });
   };
   const refreshPlaylists = async () => {
     if (!api) { setPlaylists(emptyLocalPlaylists); return; }
     const session = sessionRequest.current;
+    const request = ++playlistsRefreshRequest.current;
     setPlaylistsLoading(true); setPlaylistsError('');
-    try { const lists = await api.playlists(); if (session === sessionRequest.current) setPlaylists(lists); }
-    catch (error) { if (session === sessionRequest.current) setPlaylistsError(errorContent(error, 'error.loadPlaylistsRetry')); }
-    finally { if (session === sessionRequest.current) setPlaylistsLoading(false); }
+    try { const lists = await api.playlists(); if (session === sessionRequest.current && request === playlistsRefreshRequest.current) setPlaylists(lists); }
+    catch (error) { if (session === sessionRequest.current && request === playlistsRefreshRequest.current) setPlaylistsError(errorContent(error, 'error.loadPlaylistsRetry')); }
+    finally { if (session === sessionRequest.current && request === playlistsRefreshRequest.current) setPlaylistsLoading(false); }
   };
   const openPlaylist = async (playlist: Playlist, pushHistory = true) => {
     artistRequest.current++; albumRequest.current++;
@@ -493,6 +622,24 @@ function AppContent() {
     } finally {
       if (request === albumRequest.current) setAlbumLoading(false);
     }
+  };
+  const removeSongFromPlaylist = async (playlist: Playlist, song: Song) => {
+    if (!api || playlistSongRemoving) return;
+    const activeApi = api;
+    const session = sessionRequest.current;
+    setPlaylistSongRemoving(song.id);
+    try {
+      await activeApi.removeFromPlaylist(playlist.id, song.id);
+      if (session !== sessionRequest.current || activeApi !== api) return;
+      const update = (current: Playlist | null) => current?.id !== playlist.id ? current : { ...current, songs: (current.songs || []).filter((item) => item.id !== song.id), songCount: Math.max(0, current.songCount - 1), duration: Math.max(0, current.duration - (song.duration || 0)) };
+      setSelectedPlaylist(update);
+      for (const snapshot of detailHistory.current.values()) snapshot.playlist = update(snapshot.playlist);
+      setPlaylists((current) => current.map((item) => item.id === playlist.id ? { ...item, songCount: Math.max(0, item.songCount - 1), duration: Math.max(0, item.duration - (song.duration || 0)) } : item));
+      setMessage({ type: 'success', text: { key: 'message.removedFromPlaylist', values: { name: playlist.name } } });
+      void refreshPlaylists();
+    } catch (error) {
+      if (session === sessionRequest.current) setMessage({ type: 'error', text: errorContent(error, 'error.removeFromPlaylist') });
+    } finally { if (session === sessionRequest.current) setPlaylistSongRemoving(''); }
   };
   const addSongToPlaylist = async (playlistId: string, song: Song) => {
     if (!api || playlistSongAdding) return;
@@ -627,18 +774,20 @@ function AppContent() {
   };
   const togglePlay = () => {
     const audio = audioRef.current; if (!audio || !currentTrack) return;
-    if (audio.paused) audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); else { audio.pause(); setPlaying(false); }
+    if (audio.paused) audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    else fadeAudio(audio, 0, 180, () => { audio.pause(); setPlaying(false); });
   };
   const next = () => {
     if (!queue.length) return;
     const nextIndex = (currentIndex + 1) % queue.length;
-    if (!repeat && currentIndex === queue.length - 1) { audioRef.current?.pause(); setPlaying(false); return; }
+    if (!repeat && currentIndex === queue.length - 1) { fadeAudio(audioRef.current!, 0, 200, () => { audioRef.current?.pause(); setPlaying(false); }); return; }
     if (nextIndex === currentIndex && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play().catch(() => setPlaying(false)); }
     else setCurrentIndex(nextIndex);
   };
   const previous = () => { if (audioRef.current && audioRef.current.currentTime > 3) audioRef.current.currentTime = 0; else if (queue.length) setCurrentIndex((currentIndex - 1 + queue.length) % queue.length); };
 
   const primaryNav = [{ id: 'home' as const, label: t('nav.home'), icon: Home }, { id: 'library' as const, label: t('nav.library'), icon: Library }, { id: 'artists' as const, label: t('common.artists'), icon: Users }, { id: 'albums' as const, label: t('common.albums'), icon: AlbumIcon }];
+  const isConnected = mode === 'server' && !!connectedSettings;
   const currentServerName = mode === 'local' ? t('server.localMode') : serverLabel(connectedSettings || settings);
   const resetDetailHistory = () => {
     detailHistory.current.clear(); historyScroll.current.clear();
@@ -680,7 +829,7 @@ function AppContent() {
     if (saved?.artistLoading && saved.artist && navigation.pages[index] === 'artist') void openArtist(saved.artist.name, saved.artist.id, false);
     setMobileNav(false); setServerMenuOpen(false);
   };
-  const openConnectionSettings = () => { setConnectionViewKey((key) => key + 1); nav('settings'); };
+  const openConnectionSettings = () => { cancelPendingConnection(); setConnectionViewKey((key) => key + 1); nav('settings'); };
   const [playlistsCollapsed, setPlaylistsCollapsed] = useState(() => storageGet('tenma.playlistsCollapsed') === '1');
   const togglePlaylistsCollapsed = () => {
     const next = !playlistsCollapsed;
@@ -696,25 +845,34 @@ function AppContent() {
     return <button key={id} className={cn('nav-item', active && 'active')} aria-current={active ? 'page' : undefined} onClick={() => nav(id)}><Icon size={18} /><span>{label}</span></button>;
   };
 
-  return <div className={cn('app-shell', !preferences.showArtists && 'hide-album-artists', !preferences.showDurations && 'hide-song-durations', preferences.theme === 'noir' && 'theme-noir', preferences.theme === 'spotify' && 'theme-spotify')}>
+  const customWallpaperSrc = backgroundImage && typeof window !== 'undefined' ? convertFileSrc(backgroundImage) : '';
+  const wallpaperSrc = wallpaper === 'custom' ? customWallpaperSrc : wallpaper !== 'none' ? BUILTIN_WALLPAPERS[wallpaper].full : '';
+  // Chrome alpha follows wallpaper visibility: more visible wallpaper -> more translucent panels (~54% at 40%, ~40% at 75%).
+  const wallpaperShellStyle = wallpaperSrc ? { '--wp-pct': `${Math.round(70 - 40 * wallpaperOpacity / 100)}%`, '--wp-image': `url("${wallpaperSrc}")` } as React.CSSProperties : undefined;
+  return <div className={cn('app-shell', wallpaperSrc && 'has-wallpaper', preferences.theme !== 'midnight' && `theme-${preferences.theme}`)} style={wallpaperShellStyle}>
+    {wallpaperSrc ? <div className="app-wallpaper" aria-hidden="true" style={{ backgroundImage: `url("${wallpaperSrc}")`, opacity: wallpaperOpacity / 100, filter: wallpaperBlur > 0 ? `blur(${wallpaperBlur}px)` : undefined }} /> : null}
+    {createPlaylistOpen && <div className="modal-backdrop" onMouseDown={() => !creatingPlaylist && setCreatePlaylistOpen(false)}><section className="create-playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="create-playlist-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="create-playlist-title">{t('playlists.createTitle')}</h2><p>{t('playlists.createDescription')}</p><form onSubmit={createPlaylist}><label className="settings-field">{t('playlists.nameLabel')}<input autoFocus required maxLength={128} className="settings-input" value={newPlaylistName} onChange={(event) => setNewPlaylistName(event.target.value)} placeholder={t('playlists.namePlaceholder')} /></label><div className="settings-actions"><button type="button" className="secondary-button" disabled={creatingPlaylist} onClick={() => setCreatePlaylistOpen(false)}>{t('close.cancel')}</button><button type="submit" className="primary-button" disabled={creatingPlaylist || !newPlaylistName.trim()}>{creatingPlaylist ? <><LoaderCircle className="spin" size={16} />{t('playlists.creating')}</> : t('playlists.create')}</button></div></form></section></div>}
+    {playlistContextMenu && <div className="playlist-context-menu" role="menu" style={{ left: playlistContextMenu.x, top: playlistContextMenu.y }}><button type="button" role="menuitem" onClick={openPlaylistCreation}><Plus size={16} />{t('playlists.create')}</button></div>}
     {closePromptOpen && <div className="close-prompt-backdrop" role="presentation"><section className="close-prompt" role="dialog" aria-modal="true" aria-labelledby="close-prompt-title"><h2 id="close-prompt-title">{t('close.title')}</h2><p>{t('close.description')}</p><label className="close-prompt-remember"><input type="checkbox" checked={rememberCloseChoice} onChange={(event) => setRememberCloseChoice(event.target.checked)} /><span>{t('close.remember')}</span></label><div className="close-prompt-actions"><button className="secondary-button" onClick={() => setClosePromptOpen(false)}>{t('close.cancel')}</button><button className="secondary-button" onClick={() => resolveCloseChoice('background')}>{t('close.background')}</button><button className="primary-button" onClick={() => resolveCloseChoice('quit')}>{t('close.quit')}</button></div></section></div>}
+    {editingPlaylist && api && <PlaylistEditor key={editingPlaylist.id} playlist={editingPlaylist} onSave={(name) => renamePlaylist(editingPlaylist, name)} onDelete={() => deletePlaylist(editingPlaylist)} onClose={() => setEditingPlaylist(null)} />}
     <aside className={cn('sidebar', mobileNav && 'mobile-open')}>
       <div className="server-switcher" ref={serverSwitcherRef}>
         <button ref={serverButtonRef} className="server-switcher-button" aria-label={t('server.switch', { name: currentServerName })} aria-expanded={serverMenuOpen} aria-controls="server-options" onClick={() => setServerMenuOpen((open) => !open)}><span className={cn('status-dot', isConnected && 'online')} /><span className="server-switcher-copy"><strong>{currentServerName}</strong><small>{isConnected ? t('server.connected') : t('server.localMode')}</small></span><ChevronDown size={16} /></button>
         {serverMenuOpen && <div className="server-menu" id="server-options" aria-label={t('server.options')}>
           <p>{t('server.musicServer')}</p>
           {isConnected && <button className="server-option current" onClick={() => setServerMenuOpen(false)}><span className="status-dot online" /><span>{currentServerName}<small>{t('server.currentConnection')}</small></span><Check size={15} /></button>}
-          <button className={cn('server-option', mode === 'local' && 'current')} onClick={() => { if (mode !== 'local') useLocalMode(); nav('home'); }}><Disc3 size={17} /><span>{t('server.localMode')}<small>{localFolder || t('server.localHint')}</small></span>{mode === 'local' && <Check size={15} />}</button>
-          {mode === 'local' && settings.server && <button className="server-option" onClick={() => { setServerMenuOpen(false); restoreRemoteConnection(); }}><Server size={17} /><span>{t('server.restoreRemote', { name: settings.serverName || serverLabel(settings) })}</span></button>}
+          <button className={cn('server-option', mode === 'local' && 'current')} onClick={() => { if (mode !== 'local' || connecting) useLocalMode(); nav('home'); }}><Disc3 size={17} /><span>{t('server.localMode')}<small>{localFolder || t('server.localHint')}</small></span>{mode === 'local' && <Check size={15} />}</button>
+          {mode === 'local' && lastLogin.current.settings.server && <button className="server-option" disabled={connecting} onClick={() => { setServerMenuOpen(false); restoreRemoteConnection(); }}><Server size={17} /><span>{t('server.restoreRemote', { name: serverLabel(lastLogin.current.settings) })}</span></button>}
           <button className="server-option server-add" onClick={openConnectionSettings}><Plus size={17} /><span>{t('server.addSwitch')}</span></button>
           <small className="server-menu-note">{t('server.singleServerNote')}</small>
         </div>}
       </div>
       <nav className="sidebar-navigation" aria-label={t('nav.main')}>
         <div className="nav-group">{primaryNav.map(renderNavItem)}</div>
-        <div className="nav-group playlists-nav">
+        <div className="nav-group playlists-nav" onContextMenu={openPlaylistContextMenu}>
           <div className="playlists-nav-heading">
             <button className="playlists-nav-title" onClick={() => { setMobileNav(false); nav('playlists'); }}>{t('common.playlists')}</button>
+            <button type="button" className="icon-button playlists-create-button" aria-label={t('playlists.create')} title={t('playlists.create')} disabled={!api} onClick={openPlaylistCreation}><Plus size={15} /></button>
             <button className="icon-button playlists-nav-toggle" aria-label={t('nav.togglePlaylists')} aria-expanded={!playlistsCollapsed} onClick={togglePlaylistsCollapsed}><ChevronDown size={15} className={cn('playlists-toggle-icon', !playlistsCollapsed && 'open')} /></button>
           </div>
           {playlists.length ? (!playlistsCollapsed && <div className="playlists-nav-list">
@@ -742,24 +900,24 @@ function AppContent() {
         {message && <div className="toast-spacer" />}
         {message && <div className={cn('toast', message.type)}>{message.type === 'success' ? '✓' : message.type === 'info' ? 'ℹ' : '!'} {resolveMessage(message.text, t)}<button aria-label={t('common.dismissNotification')} onClick={() => setMessage(null)}><X size={15} /></button></div>}
         <div key={page} className="content-page">
-          {page === 'settings' ? <SettingsView key={connectionViewKey} settings={settings} setSettings={setSettings} connected={connectedSettings} password={password} setPassword={setPassword} rememberPassword={rememberPassword} setRememberPassword={setRememberPassword} connect={connect} loading={loading} mode={mode} useLocal={() => useLocalMode()} restoreRemote={restoreRemoteConnection} disconnect={() => disconnectRemote()} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onPlay={playSong} playlists={playlists} onOpenPlaylist={(playlist) => { setMobileNav(false); void openPlaylist(playlist); }} mode={mode} localFolder={localFolder} onConnect={() => nav('settings')} />}
+          {page === 'settings' ? <SettingsView key={connectionViewKey} openServerForm={connectionViewKey > 0} settings={settings} setSettings={editConnection} connected={connectedSettings} password={password} setPassword={(value) => { cancelPendingConnection(); setPassword(value); }} rememberPassword={rememberPassword} setRememberPassword={(value) => { cancelPendingConnection(); setRememberPassword(value); }} connect={connect} loading={connecting} mode={mode} useLocal={() => useLocalMode()} restoreRemote={restoreRemoteConnection} disconnect={disconnectRemote} backgroundImage={backgroundImage} onChooseBackground={chooseBackground} onClearBackground={clearBackground} wallpaper={wallpaper} onWallpaperChange={changeWallpaper} wallpaperOpacity={wallpaperOpacity} onWallpaperOpacityChange={changeWallpaperOpacity} wallpaperBlur={wallpaperBlur} onWallpaperBlurChange={changeWallpaperBlur} onWallpaperReset={resetWallpaper} customWallpaperSrc={customWallpaperSrc} localFolder={localFolder} localLoading={localLoading} localSongCount={localSongs.length} chooseLocalFolder={chooseLocalFolder} rescanLocalLibrary={() => loadLocalLibrary(localFolder, true)} rename={renameServer} preferences={preferences} setPreferences={setPreferences} updateVersion={availableUpdate?.version} updateStatus={updateStatus} updateProgress={updateProgress} updateError={resolveMessage(updateError, t)} updateMessage={updateMessage ? t(updateMessage) : ''} checkForUpdate={() => { if (!isTauri()) { setUpdateError({ key: 'update.unavailableWeb' }); setUpdateMessage(''); return; } setUpdateError(''); setUpdateMessage(''); setUpdateStatus('checking'); import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15000 })).then((result) => { if (result) { setAvailableUpdate(result as AvailableUpdate); setUpdateMessage(''); } else setUpdateMessage('update.latest'); setUpdateStatus('idle'); }).catch((error: unknown) => { setUpdateStatus('error'); setUpdateError(errorContent(error, 'update.failedCheck')); }) }} installUpdate={installUpdate} /> : page === 'playlists' ? <PlaylistsView playlists={playlists} onOpen={openPlaylist} error={resolveMessage(playlistsError, t)} onRefresh={refreshPlaylists} loading={playlistsLoading} /> : page === 'playlist' ? <PlaylistDetailView onEdit={api ? (playlist) => setEditingPlaylist(playlist) : undefined} playlist={selectedPlaylist} loading={playlistLoading} error={resolveMessage(playlistError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} onRemoveFromPlaylist={api && selectedPlaylist ? (song) => removeSongFromPlaylist(selectedPlaylist, song) : undefined} removingSongId={playlistSongRemoving} addingSongId={playlistSongAdding} showBitRate /> : page === 'album' ? <AlbumDetailView album={selectedAlbum} loading={albumLoading} error={resolveMessage(albumError, t)} onBack={() => moveHistory(-1)} onPlay={playSong} onPlayCollection={playCollection} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : page === 'artist' ? <ArtistDetailView artist={selectedArtist} loading={artistLoading} error={resolveMessage(artistError, t)} onBack={() => moveHistory(-1)} onOpen={openAlbum} onPlay={playSong} onArtist={openArtist} onAlbum={openSongAlbum} canOpenAlbum={(song) => !!linkedAlbum(song)} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} /> : page === 'artists' ? <ArtistsView albums={albums} onOpen={openArtist} /> : page === 'albums' ? <AlbumsView albums={albums} error={resolveMessage(albumsError, t)} onOpen={openAlbum} onArtist={openArtist} /> : page === 'library' || page === 'search' ? <LibraryView albums={albums} albumsError={resolveMessage(albumsError, t)} playlists={playlists} playlistsError={resolveMessage(playlistsError, t)} songs={librarySongs} songPage={librarySongPage} songLoading={librarySongLoading} songError={resolveMessage(librarySongError, t)} hasNext={libraryHasNext} knownPageCount={libraryKnownPageCount} query={query} onQuery={setQuery} results={searchResults} searchLoading={loading} onArtist={openArtist} onOpen={openAlbum} onPlay={playSong} onPage={loadLibrarySongs} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} showBitRate /> : <HomeView randomSongs={randomSongs} randomLoading={randomLoading} randomError={resolveMessage(randomError, t)} onRefreshRandom={refreshRandom} onPlay={playSong} playlists={playlists} onOpenPlaylist={(playlist) => { setMobileNav(false); void openPlaylist(playlist); }} mode={mode} localFolder={localFolder} onConnect={() => nav('settings')} onArtist={openArtist} />}
         </div>
       </div>
     </main>
-    <audio ref={audioRef} onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setMessage({ type: 'error', text: { key: 'player.failed' } }); }} onEnded={() => { setPlaying(false); if (preferences.autoNext) next(); }} />
+    <audio ref={audioRef} onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} onPlay={() => { setPlaying(true); if (audioRef.current) fadeAudio(audioRef.current, perceivedVolume(volume), 280); }} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setMessage({ type: 'error', text: { key: 'player.failed' } }); }} onEnded={() => { setPlaying(false); if (preferences.autoNext) next(); }} />
     <Player track={currentTrack} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} showQueue={showQueue} onQueue={toggleQueue} onOpenNowPlaying={() => { setShowQueue(false); setNowPlayingOpen(true); }} onRandomPlay={randomPlay} />
-    {nowPlayingOpen && <NowPlayingView track={currentTrack} queue={queue} queueIndex={currentIndex} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} closing={nowPlayingClosing} api={api} onClose={closeNowPlaying} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} onQueueSelect={(index) => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} onArtist={(name, artistId) => { closeNowPlaying(); openArtist(name, artistId); }} onAlbum={(song) => { closeNowPlaying(); openSongAlbum(song); }} canOpenAlbum={(song) => !!linkedAlbum(song)} />}
+    {nowPlayingOpen && <NowPlayingView audioRef={audioRef} track={currentTrack} queue={queue} queueIndex={currentIndex} playing={playing} currentTime={currentTime} duration={duration} volume={volume} muted={muted} shuffle={shuffle} repeat={repeat} closing={nowPlayingClosing} api={api} onClose={closeNowPlaying} onToggle={togglePlay} onPrevious={previous} onNext={next} onSeek={(value) => { if (audioRef.current) audioRef.current.currentTime = value; setCurrentTime(value); }} onVolume={changeVolume} onMute={toggleMute} onShuffle={toggleShuffle} onRepeat={() => setRepeat(!repeat)} onQueueSelect={(index) => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }} playlists={playlists} onAddToPlaylist={api ? addSongToPlaylist : undefined} addingSongId={playlistSongAdding} onArtist={(name, artistId) => { closeNowPlaying(); openArtist(name, artistId); }} onAlbum={(song) => { closeNowPlaying(); openSongAlbum(song); }} canOpenAlbum={(song) => !!linkedAlbum(song)} />}
     {showQueue && <section ref={queuePanelRef} className={cn('queue-panel', queueClosing && 'leaving')} aria-label={t('player.queue')}><div className="group-title"><h2>{t('player.queue')}</h2><button className="icon-button" aria-label={t('player.closeQueue')} onClick={closeQueue}><X size={18} /></button></div>{queue.length ? queue.map((song, index) => <button key={`${song.id}-${index}`} className={cn('queue-track', index === currentIndex && 'control-active')} onClick={() => { if (index === currentIndex) togglePlay(); else setCurrentIndex(index); }}><Cover src={song.coverArt} alt={song.album} className="queue-track-cover" /><span className="queue-track-copy">{song.title}<small>{song.artist}</small></span><span className="song-duration">{formatTime(song.duration)}</span></button>) : <p>{t('player.emptyQueue')}</p>}</section>}
 
   </div>;
 }
 
-function HomeView({ randomSongs, randomLoading, randomError, onRefreshRandom, onPlay, playlists, onOpenPlaylist, mode, localFolder, onConnect }: { randomSongs: Song[]; randomLoading: boolean; randomError: string; onRefreshRandom: () => void; onPlay: (song: Song, list?: Song[]) => void; playlists: Playlist[]; onOpenPlaylist: (playlist: Playlist) => void; mode: AppMode; localFolder: string; onConnect: () => void }) {
+function HomeView({ randomSongs, randomLoading, randomError, onRefreshRandom, onPlay, onArtist, playlists, onOpenPlaylist, mode, localFolder, onConnect }: { randomSongs: Song[]; randomLoading: boolean; randomError: string; onRefreshRandom: () => void; onPlay: (song: Song, list?: Song[]) => void; onArtist: (name: string, artistId?: string) => void; playlists: Playlist[]; onOpenPlaylist: (playlist: Playlist) => void; mode: AppMode; localFolder: string; onConnect: () => void }) {
   const { t } = useI18n();
   return <section className="home-view">
     <div className="page-heading"><h1>{t('nav.home')}</h1><p>{t('library.description')}</p></div>
     {mode === 'local' && !localFolder && <p className="connection-hint">{t('home.localHint')} <button onClick={onConnect}>{t('home.chooseFolder')} <ChevronRight size={13} /></button></p>}
-    <RecommendCards songs={randomSongs.slice(0, 9)} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} />
+    <RecommendCards songs={randomSongs.slice(0, 9)} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} onArtist={onArtist} />
     {playlists.length > 0 && <>
       <div className="section-heading home-playlists-heading"><h2>{t('common.playlists')}</h2><span>{t('count.playlists', { count: playlists.length })}</span></div>
       <div className="home-playlist-grid">
@@ -787,12 +945,12 @@ function Pagination({ page, pageCount, onPage, hasNext = page < pageCount - 1 }:
   </nav>;
 }
 
-function AlbumsView({ albums, error, onOpen }: { albums: Album[]; error: string; onOpen: (album: Album) => void }) {
+function AlbumsView({ albums, error, onOpen, onArtist }: { albums: Album[]; error: string; onOpen: (album: Album) => void; onArtist?: (name: string, artistId?: string) => void }) {
   const { t } = useI18n();
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(albums.length / GRID_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
-  return <section className="albums-view"><div className="section-heading"><h1>{t('common.albums')}</h1><span>{t('count.albums', { count: albums.length })}</span></div>{error ? <p className="inline-error">{t('albums.loadFailed', { error })}</p> : <p className="library-note">{t('albums.allLoaded')}</p>}{albums.length ? <><BalancedGrid className="album-grid" itemCount={Math.min(GRID_PAGE_SIZE, albums.length - currentPage * GRID_PAGE_SIZE)}>{albums.slice(currentPage * GRID_PAGE_SIZE, (currentPage + 1) * GRID_PAGE_SIZE).map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} />)}</BalancedGrid><Pagination page={currentPage} pageCount={pageCount} onPage={setPage} /></> : <EmptyPage title={t('albums.empty')} description={t('albums.emptyDescription')} icon={<AlbumIcon size={25} />} />}</section>;
+  return <section className="albums-view"><div className="section-heading"><h1>{t('common.albums')}</h1><span>{t('count.albums', { count: albums.length })}</span></div>{error ? <p className="inline-error">{t('albums.loadFailed', { error })}</p> : <p className="library-note">{t('albums.allLoaded')}</p>}{albums.length ? <><BalancedGrid className="album-grid" itemCount={Math.min(GRID_PAGE_SIZE, albums.length - currentPage * GRID_PAGE_SIZE)}>{albums.slice(currentPage * GRID_PAGE_SIZE, (currentPage + 1) * GRID_PAGE_SIZE).map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} onArtist={onArtist} />)}</BalancedGrid><Pagination page={currentPage} pageCount={pageCount} onPage={setPage} /></> : <EmptyPage title={t('albums.empty')} description={t('albums.emptyDescription')} icon={<AlbumIcon size={25} />} />}</section>;
 }
 
 function ArtistsView({ albums, onOpen }: { albums: Album[]; onOpen: (name: string, artistId?: string) => void }) {
@@ -833,15 +991,29 @@ function TrackTable({ songs, onPlay, playlists, onAddToPlaylist, addingSongId, o
   </div>;
 }
 
-function RecommendCards({ songs, loading, error, onRefresh, onPlay }: { songs: Song[]; loading: boolean; error: string; onRefresh: () => void; onPlay: (song: Song, list?: Song[]) => void }) {
+function RecommendCards({ songs, loading, error, onRefresh, onPlay, onArtist }: { songs: Song[]; loading: boolean; error: string; onRefresh: () => void; onPlay: (song: Song, list?: Song[]) => void; onArtist: (name: string, artistId?: string) => void }) {
   const { t } = useI18n();
-  return <><div className="section-heading"><h2>{t('recommend.title')}</h2><button className="secondary-button" disabled={loading} onClick={onRefresh}><Shuffle size={14} />{t('common.refresh')}</button></div>{error && <p className="inline-error">{error}</p>}{loading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('recommend.choosing')}</div> : songs.length ? <div className="recommend-grid">{songs.map((song) => <button className="recommend-card" key={song.id} onClick={() => onPlay(song, songs)}><Cover src={song.coverArt} alt={song.album} /><span className="recommend-copy"><strong>{song.title}</strong><small>{song.artist} · {song.album}</small></span><span className="recommend-play"><Play size={15} fill="currentColor" /></span></button>)}</div> : <EmptyPage title={t('recommend.empty')} description={t('recommend.emptyDescription')} icon={<Music2 size={25} />} />}</>;
+  return <><div className="section-heading"><h2>{t('recommend.title')}</h2><button className="secondary-button" disabled={loading} onClick={onRefresh}><Shuffle size={14} />{t('common.refresh')}</button></div>{error && <p className="inline-error">{error}</p>}{loading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('recommend.choosing')}</div> : songs.length ? <div className="recommend-grid">{songs.map((song) => {
+    const playLabel = t('player.playTrack', { title: song.title, artist: song.artist });
+    return <div className="recommend-card" key={song.id}>
+      <button type="button" className="recommend-cover-button" aria-label={playLabel} onClick={() => onPlay(song, songs)}><Cover src={song.coverArt} alt={song.album} /></button>
+      <span className="recommend-copy"><button type="button" className="recommend-track-title" onClick={() => onPlay(song, songs)}><strong>{song.title}</strong></button><small><MetadataLink label={t('artists.view', { name: song.artist })} onOpen={() => onArtist(song.artist, song.artistId)}>{song.artist}</MetadataLink>{song.album && <> · {song.album}</>}</small></span>
+      <button type="button" className="recommend-play" aria-label={playLabel} onClick={() => onPlay(song, songs)}><Play size={15} fill="currentColor" /></button>
+    </div>;
+  })}</div> : <EmptyPage title={t('recommend.empty')} description={t('recommend.emptyDescription')} icon={<Music2 size={25} />} />}</>;
 }
 
 function SearchResultsCards({ results, loading, onArtist, onOpen, onPlay }: { results: SearchResults; loading: boolean; onArtist: (name: string, artistId?: string) => void; onOpen: (album: Album) => void; onPlay: (song: Song, list?: Song[]) => void }) {
   const { t } = useI18n();
   if (loading) return <div className="loading-state"><LoaderCircle className="spin" size={25} />{t('search.loading')}</div>;
-  return <>{results.songs.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.tracks')}</h2><span>{results.songs.length}</span></div><div className="search-result-grid">{results.songs.map((song) => <button className="search-result-card" key={song.id} onClick={() => onPlay(song, results.songs)}><Cover src={song.coverArt} alt={song.album} /><span className="recommend-copy"><strong>{song.title}</strong><small>{song.artist} · {song.album}</small></span><Play size={15} /></button>)}</div></div>}{results.albums.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.albums')}</h2><span>{results.albums.length}</span></div><BalancedGrid className="album-grid search-grid" itemCount={results.albums.length}>{results.albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} />)}</BalancedGrid></div>}{results.artists.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.artists')}</h2><span>{results.artists.length}</span></div><div className="artist-pills">{results.artists.map((artist) => <button key={artist.id} onClick={() => onArtist(artist.name, artist.id)}><span className="artist-avatar">{artist.name[0]}</span>{artist.name}</button>)}</div></div>}{!results.songs.length && !results.albums.length && !results.artists.length && <EmptyPage title={t('search.noResults')} description={t('search.noResultsDescription')} icon={<Search size={25} />} />}</>;
+  return <>{results.songs.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.tracks')}</h2><span>{results.songs.length}</span></div><div className="search-result-grid">{results.songs.map((song) => {
+    const playLabel = t('player.playTrack', { title: song.title, artist: song.artist });
+    return <div className="search-result-card" key={song.id}>
+      <button type="button" className="recommend-cover-button" aria-label={playLabel} onClick={() => onPlay(song, results.songs)}><Cover src={song.coverArt} alt={song.album} /></button>
+      <span className="recommend-copy"><button type="button" className="recommend-track-title" onClick={() => onPlay(song, results.songs)}><strong>{song.title}</strong></button><small><MetadataLink label={t('artists.view', { name: song.artist })} onOpen={() => onArtist(song.artist, song.artistId)}>{song.artist}</MetadataLink>{song.album && <> · {song.album}</>}</small></span>
+      <button type="button" className="recommend-play" aria-label={playLabel} onClick={() => onPlay(song, results.songs)}><Play size={15} /></button>
+    </div>;
+  })}</div></div>}{results.albums.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.albums')}</h2><span>{results.albums.length}</span></div><BalancedGrid className="album-grid search-grid" itemCount={results.albums.length}>{results.albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} onArtist={onArtist} />)}</BalancedGrid></div>}{results.artists.length > 0 && <div className="result-group"><div className="group-title"><h2>{t('common.artists')}</h2><span>{results.artists.length}</span></div><div className="artist-pills">{results.artists.map((artist) => <button key={artist.id} onClick={() => onArtist(artist.name, artist.id)}><span className="artist-avatar">{artist.name[0]}</span>{artist.name}</button>)}</div></div>}{!results.songs.length && !results.albums.length && !results.artists.length && <EmptyPage title={t('search.noResults')} description={t('search.noResultsDescription')} icon={<Search size={25} />} />}</>;
 }
 
 function LibraryView({ albums, albumsError, playlists, playlistsError, songs, songPage, songLoading, songError, hasNext, knownPageCount, query, onQuery, results, searchLoading, onArtist, onOpen, onPlay, onPage, onAddToPlaylist, addingSongId }: { albums: Album[]; albumsError: string; playlists: Playlist[]; playlistsError: string; songs: Song[]; songPage: number; songLoading: boolean; songError: string; hasNext: boolean; knownPageCount: number; query: string; onQuery: (query: string) => void; results: SearchResults; searchLoading: boolean; onArtist: (name: string, artistId?: string) => void; onOpen: (album: Album) => void; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void; onPage: (page: number) => void; onAddToPlaylist?: (playlistId: string, song: Song) => void; addingSongId?: string } & DetailNavigation) {
@@ -864,7 +1036,7 @@ function LibraryView({ albums, albumsError, playlists, playlistsError, songs, so
 // Kept as a compatibility export for older integrations; the app routes search into LibraryView.
 function SearchView({ query, onQuery, results, loading, randomSongs, randomLoading, randomError, onRefreshRandom, onArtist, onOpen, onPlay }: { query: string; onQuery: (query: string) => void; results: SearchResults; loading: boolean; randomSongs: Song[]; randomLoading: boolean; randomError: string; onRefreshRandom: () => void; onArtist: (name: string, artistId?: string) => void; onOpen: (album: Album) => void; onPlay: (song: Song, list?: Song[]) => void }) {
   const { t } = useI18n();
-  return <section className="search-view"><div className="search-hero"><Search size={21} /><input aria-label={t('search.inputWithAnd')} value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t('search.placeholder')} /></div>{query.trim() ? <SearchResultsCards results={results} loading={loading} onArtist={onArtist} onOpen={onOpen} onPlay={onPlay} /> : <RecommendCards songs={randomSongs} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} />}</section>;
+  return <section className="search-view"><div className="search-hero"><Search size={21} /><input aria-label={t('search.inputWithAnd')} value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t('search.placeholder')} /></div>{query.trim() ? <SearchResultsCards results={results} loading={loading} onArtist={onArtist} onOpen={onOpen} onPlay={onPlay} /> : <RecommendCards songs={randomSongs} loading={randomLoading} error={randomError} onRefresh={onRefreshRandom} onPlay={onPlay} onArtist={onArtist} />}</section>;
 }
 
 function EmptyPage({ title, description, icon }: { title: string; description: string; icon: React.ReactNode }) { return <div className="empty-page"><div className="empty-icon">{icon}</div><h2>{title}</h2><p>{description}</p></div>; }
@@ -880,7 +1052,7 @@ function ArtistDetailView({ artist, loading, error, onBack, onOpen, onPlay, onAr
   return <section className="detail-page artist-detail"><DetailBack onBack={onBack} />
     <div className="detail-header"><Cover src={artist.albums[0]?.coverArt} alt={artist.name} className="detail-cover artist-avatar" /><div className="detail-content"><p className="eyebrow">{t('track.artist')}</p><h1>{artist.name}</h1><p className="detail-meta">{t('count.albums', { count: artist.albums.length })} · {loading ? t('library.loadingTracks') : t('count.tracks', { count: artist.songs.length })}</p><button className="primary-button" disabled={loading || !artist.songs.length} onClick={() => onPlay(artist.songs[0], artist.songs)}><Play size={16} fill="currentColor" />{t('detail.playTracks')}</button></div></div>
     <div className="detail-section-heading"><h2>{t('common.albums')}</h2><span>{artist.albums.length}</span></div>
-    {artist.albums.length ? <BalancedGrid className="album-grid" itemCount={artist.albums.length}>{artist.albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} />)}</BalancedGrid> : <p className="library-note">{t('detail.noArtistAlbums')}</p>}
+    {artist.albums.length ? <BalancedGrid className="album-grid" itemCount={artist.albums.length}>{artist.albums.map((album) => <AlbumCard key={album.id} album={album} onOpen={onOpen} onArtist={onArtist} />)}</BalancedGrid> : <p className="library-note">{t('detail.noArtistAlbums')}</p>}
     <div className="detail-section-heading"><h2>{t('common.tracks')}</h2><span>{artist.songs.length}</span></div>
     {error && <p className="inline-error">{error}</p>}
     {loading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('detail.loadingArtistTracks')}</div> : artist.songs.length ? <TrackTable songs={artist.songs} onPlay={onPlay} playlists={playlists} onAddToPlaylist={onAddToPlaylist} addingSongId={addingSongId} onArtist={onArtist} onAlbum={onAlbum} canOpenAlbum={canOpenAlbum} /> : <EmptyPage title={t('library.noTracks')} description={t('detail.noArtistTracks')} icon={<Music2 size={25} />} />}
@@ -905,11 +1077,13 @@ interface DetailNavigation {
   canOpenAlbum?: (song: Song) => boolean;
   playlists?: Playlist[];
   onAddToPlaylist?: (playlistId: string, song: Song) => void;
+  onRemoveFromPlaylist?: (song: Song) => void;
+  removingSongId?: string;
   addingSongId?: string;
   showBitRate?: boolean;
 }
 
-function DetailTrackList({ songs, fallbackCover, onPlay, onArtist, onAlbum, canOpenAlbum, playlists, onAddToPlaylist, addingSongId, showBitRate = false }: { songs: Song[]; fallbackCover?: string; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void } & DetailNavigation) {
+function DetailTrackList({ songs, fallbackCover, onPlay, onArtist, onAlbum, canOpenAlbum, playlists, onAddToPlaylist, onRemoveFromPlaylist, removingSongId, addingSongId, showBitRate = false }: { songs: Song[]; fallbackCover?: string; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void } & DetailNavigation) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<{ song: Song; x: number; y: number } | null>(null);
   useEffect(() => { setMenu(null); }, [songs]);
@@ -941,7 +1115,7 @@ function DetailTrackList({ songs, fallbackCover, onPlay, onArtist, onAlbum, canO
       <span className="song-duration">{formatTime(song.duration)}</span><span className="detail-track-actions"><button type="button" className="detail-track-play-icon" aria-label={playLabel} onClick={play}><Play size={16} /></button>{playlists && <button type="button" className="detail-track-menu-button" aria-label={t('menu.moreActions')} aria-haspopup="menu" onClick={(event) => openMenu(song, event)}><MoreVertical size={16} /></button>}</span>
       </div>;
     })}
-    {menu && <TrackContextMenu song={menu.song} position={{ x: menu.x, y: menu.y }} playlists={playlists || []} adding={addingSongId === menu.song.id} onAddToPlaylist={onAddToPlaylist} onArtist={onArtist} onAlbum={onAlbum && (!canOpenAlbum || canOpenAlbum(menu.song)) ? onAlbum : undefined} onClose={() => setMenu(null)} />}
+    {menu && <TrackContextMenu song={menu.song} position={{ x: menu.x, y: menu.y }} playlists={playlists || []} adding={addingSongId === menu.song.id} removing={removingSongId === menu.song.id} onAddToPlaylist={onAddToPlaylist} onRemoveFromPlaylist={onRemoveFromPlaylist ? () => onRemoveFromPlaylist(menu.song) : undefined} onArtist={onArtist} onAlbum={onAlbum && (!canOpenAlbum || canOpenAlbum(menu.song)) ? onAlbum : undefined} onClose={() => setMenu(null)} />}
   </div>;
 }
 
@@ -960,7 +1134,7 @@ function AlbumDetailView({ album, loading, error, onBack, onPlay, onPlayCollecti
   </section>;
 }
 
-function PlaylistDetailView({ playlist, loading, error, onBack, onPlay, onPlayCollection, onArtist, onAlbum, canOpenAlbum, playlists, onAddToPlaylist, addingSongId, showBitRate }: { playlist: Playlist | null; loading: boolean; error: string; onBack: () => void; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void; onPlayCollection: (songs: Song[], random: boolean) => void } & DetailNavigation) {
+function PlaylistDetailView({ playlist, loading, error, onBack, onPlay, onPlayCollection, onEdit, onArtist, onAlbum, canOpenAlbum, playlists, onAddToPlaylist, onRemoveFromPlaylist, removingSongId, addingSongId, showBitRate }: { playlist: Playlist | null; loading: boolean; error: string; onBack: () => void; onPlay: (song: Song, list?: Song[], entryIndex?: number) => void; onPlayCollection: (songs: Song[], random: boolean) => void; onEdit?: (playlist: Playlist) => void } & DetailNavigation) {
   const { t } = useI18n();
   if (!playlist) return <section className="detail-page"><DetailBack onBack={onBack} /><EmptyPage title={t('detail.playlistNotFound')} description={t('detail.playlistRemoved')} icon={<ListMusic size={25} />} /></section>;
   const songs = playlist.songs || [];
@@ -968,10 +1142,10 @@ function PlaylistDetailView({ playlist, loading, error, onBack, onPlay, onPlayCo
     <DetailBack onBack={onBack} />
     <div className="detail-header">
       <Cover src={playlist.coverArt} alt={playlist.name} className="detail-cover" />
-      <div className="detail-content"><p className="eyebrow">{t('common.playlist')} · {playlist.public ? t('common.public') : t('common.private')}</p><h1>{playlist.name}</h1><p className="detail-meta">{playlist.owner || t('detail.currentAccount')} · {t('count.tracks', { count: playlist.songCount || songs.length })} · {formatTime(playlist.duration)}</p>{playlist.comment && <p className="detail-description">{playlist.comment}</p>}<DetailPlayActions playLabel={t('detail.playPlaylist')} songs={songs} disabled={loading || !!error} onPlayCollection={onPlayCollection} /></div>
+      <div className="detail-content"><p className="eyebrow">{t('common.playlist')} · {playlist.public ? t('common.public') : t('common.private')}</p><h1>{playlist.name}</h1><p className="detail-meta">{playlist.owner || t('detail.currentAccount')} · {t('count.tracks', { count: playlist.songCount || songs.length })} · {formatTime(playlist.duration)}</p>{playlist.comment && <p className="detail-description">{playlist.comment}</p>}<DetailPlayActions playLabel={t('detail.playPlaylist')} songs={songs} disabled={loading || !!error} onPlayCollection={onPlayCollection} />{onEdit && <button type="button" className="secondary-button playlist-edit-button" disabled={loading} onClick={() => onEdit(playlist)}>{t('playlists.edit')}</button>}</div>
     </div>
     <div className="detail-section-heading"><h2>{t('common.tracks')}</h2><span>{loading ? t('common.loading') : t('count.tracks', { count: songs.length })}</span></div>
-    {loading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('detail.loadingPlaylistTracks')}</div> : error ? <div><p className="inline-error">{error}</p><button className="secondary-button" onClick={onBack}>{t('common.back')}</button></div> : songs.length ? <DetailTrackList songs={songs} onPlay={onPlay} onArtist={onArtist} onAlbum={onAlbum} canOpenAlbum={canOpenAlbum} playlists={playlists} onAddToPlaylist={onAddToPlaylist} addingSongId={addingSongId} showBitRate={showBitRate} /> : <EmptyPage title={t('library.noTracks')} description={t('detail.noPlaylistTracks')} icon={<ListMusic size={25} />} />}
+    {loading ? <div className="loading-state"><LoaderCircle className="spin" size={22} />{t('detail.loadingPlaylistTracks')}</div> : error ? <div><p className="inline-error">{error}</p><button className="secondary-button" onClick={onBack}>{t('common.back')}</button></div> : songs.length ? <DetailTrackList songs={songs} onPlay={onPlay} onArtist={onArtist} onAlbum={onAlbum} canOpenAlbum={canOpenAlbum} playlists={playlists} onAddToPlaylist={onAddToPlaylist} onRemoveFromPlaylist={onRemoveFromPlaylist} removingSongId={removingSongId} addingSongId={addingSongId} showBitRate={showBitRate} /> : <EmptyPage title={t('library.noTracks')} description={t('detail.noPlaylistTracks')} icon={<ListMusic size={25} />} />}
   </section>;
 }
 

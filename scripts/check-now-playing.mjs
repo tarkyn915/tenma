@@ -69,23 +69,62 @@ try {
         const syncedList = document.querySelector('.lyrics-list.synced');
         expect(syncedList, 'Synced lyrics list was not rendered');
         expect(syncedList.querySelectorAll('.lyrics-line').length === 6, 'Synced lyric lines are missing');
-        expect(syncedList.querySelector('.lyrics-line.active')?.textContent === 'Synced line 1', 'The active lyric line is wrong');
+        expect(syncedList.querySelector('.lyrics-line.active .lyrics-line-text')?.textContent === 'Synced line 1', 'The active lyric line is wrong');
         const blurOf = (line) => parseFloat(((getComputedStyle(line).filter || '').match(/blur\(([\d.]+)px\)/) || [])[1] || '-1');
         const lyricLines = [...syncedList.querySelectorAll('.lyrics-line')];
-        expect(blurOf(lyricLines[1]) === 0.5, 'Adjacent lines must be barely blurred, got ' + blurOf(lyricLines[1]));
-        expect(blurOf(lyricLines[2]) === 1.5, 'Two lines away must blur a bit more, got ' + blurOf(lyricLines[2]));
-        expect(blurOf(lyricLines[3]) === 3 && blurOf(lyricLines[5]) === 3, 'Far lines must blur the most, got ' + blurOf(lyricLines[3]) + '/' + blurOf(lyricLines[5]));
+        expect(blurOf(lyricLines[1]) === 1 && blurOf(lyricLines[2]) === 2 && blurOf(lyricLines[3]) === 3, 'Graded blur 1/2/3px expected, got ' + [1, 2, 3].map((i) => blurOf(lyricLines[i])).join('/'));
+        expect(parseFloat(getComputedStyle(lyricLines[3]).opacity) < parseFloat(getComputedStyle(lyricLines[1]).opacity), 'Opacity must fall with distance');
+        expect(!/filter/.test(getComputedStyle(lyricLines[1]).transitionProperty), 'Blur must not be animated');
         expect(blurOf(syncedList.querySelector('.lyrics-line.active')) <= 0, 'The active line must stay sharp');
         expect(syncedList.querySelectorAll('.lyrics-spacer').length === 2, 'Centering spacers are missing');
+        const checkHighlight = (text, percent) => {
+          const active = syncedList.querySelector('.lyrics-line.active');
+          const spans = active.querySelectorAll('.lyrics-line-text');
+          if (spans.length > 1) {
+            const tops = [...spans].map(span => { const range = document.createRange(); range.selectNodeContents(span); return range.getBoundingClientRect().top; });
+            throw new Error('Duplicate lyric glyphs at y=' + tops.join('/') + ' for ' + text);
+          }
+          expect(active.textContent === text && blurOf(active) <= 0, 'The current lyric must be sharp and rendered once');
+          const paint = getComputedStyle(spans[0]);
+          expect(paint.backgroundImage === 'none' && paint.color === 'rgb(255, 255, 255)', 'Active line must be plain white without per-word fill (at ' + percent + '%)');
+        };
+        expect(document.querySelector('.lyrics-tools .settings-select'), 'The lyrics source selector is missing');
+        const offsetLabel = () => document.querySelector('.lyrics-offset .lyrics-offset-input')?.value;
+        expect(offsetLabel() === '0.0s', 'The lyrics offset must start at zero');
+        document.querySelectorAll('.lyrics-offset button')[1].click(); await sleep(60);
+        expect(offsetLabel() === '+0.5s', 'The forward offset button must advance lyrics timing');
+        document.querySelector('.lyrics-offset button:first-child').click(); await sleep(60);
+        expect(offsetLabel() === '0.0s', 'The back offset button must return to zero');
         const audio = document.querySelector('audio');
-        audio.currentTime = 40; audio.dispatchEvent(new Event('timeupdate')); await sleep(150);
-        expect(syncedList.querySelector('.lyrics-line.active')?.textContent === 'Synced line 2', 'Playback did not advance the active lyric line');
+        // Control the media clock separately from browser timeupdate notifications.
+        Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 45 });
+        await audio.play(); audio.dispatchEvent(new Event('timeupdate')); await sleep(150);
+        checkHighlight('仿佛你在身旁', 50);
+        for (const [time, percent] of [[45.3, 51], [45.6, 52]]) {
+          audio.currentTime = time; await sleep(45);
+          checkHighlight('仿佛你在身旁', percent);
+        }
+        audio.pause(); await sleep(100);
+        checkHighlight('仿佛你在身旁', 52);
+        audio.currentTime = 39; audio.dispatchEvent(new Event('seeked')); await sleep(50);
+        checkHighlight('仿佛你在身旁', 30);
+        await audio.play(); audio.currentTime = 60; await sleep(50);
+        checkHighlight('Synced line 3', 0);
+        expect(lyricLines[1].textContent === '仿佛你在身旁' && getComputedStyle(lyricLines[1].firstElementChild).backgroundImage === 'none', 'The previous line must release its highlight');
         tabs()[0].click(); await sleep(100);
         tabs()[1].click(); await sleep(100);
         const restoredList = document.querySelector('.lyrics-list.synced');
-        expect(restoredList.querySelector('.lyrics-line.active')?.textContent === 'Synced line 2', 'The active line was lost when switching tabs');
-        if (window.innerWidth > 720) expect(restoredList.scrollTop > 40, 'Returning to the lyrics tab must jump back to the playing line, scrollTop=' + restoredList.scrollTop);
-        pass('Lyrics: distance-graded blur, sharp centered active line, position restored when switching tabs');
+        expect(restoredList.querySelector('.lyrics-line.active .lyrics-line-text')?.textContent === 'Synced line 3', 'The active line was lost when switching tabs');
+        if (window.innerWidth > 720) {
+          const tabTop = tabs()[0].getBoundingClientRect().top;
+          expect(tabTop < grid.getBoundingClientRect().top, 'Queue and Lyrics tabs should use the space beside the toolbar');
+          await waitFor(() => {
+            const line = restoredList.querySelector('.lyrics-line.active').getBoundingClientRect();
+            const center = line.top + line.height / 2 - restoredList.getBoundingClientRect().top;
+            return Math.abs(center - restoredList.clientHeight * 0.42) < 2;
+          }, 'active lyric just above the center after returning to Lyrics');
+        }
+        pass('Lyrics: graded class blur without filter transition, sharp active line, raised reading position restored when switching tabs');
         document.querySelector('.now-playing-menu-button').click(); await sleep(100);
         expect(document.querySelector('.track-context-menu'), 'Now Playing ... button did not open the track context menu, debug=' + JSON.stringify({ button: !!document.querySelector('.now-playing-menu-button'), w: window.innerWidth, h: window.innerHeight }));
         expect([...document.querySelectorAll('.track-context-menu button')].some((button) => button.textContent.trim() === 'Add to playlist' && button.disabled), 'Local mode should disable add-to-playlist in Now Playing');
@@ -103,11 +142,11 @@ try {
       const result = document.createElement('pre'); result.id = 'np-result'; result.textContent = JSON.stringify(report); result.style.display = 'none'; document.body.append(result);
     })();
   `;
-  const entry = `${source}\nimport { createRoot } from 'react-dom/client';\n// Deterministic under virtual time: never let a stale scroll event close an open menu.\ndocument.addEventListener('scroll', (event) => { if (document.querySelector('.track-context-menu')) event.stopImmediatePropagation(); }, true);\n// No real network in tests: the online lyrics fallback must answer "not found",
+  const entry = `${source}\nimport { createRoot } from 'react-dom/client';\n// Deterministic under virtual time: rAF runs as a zero-delay timer with a fake clock.\nlet rafNow = 0;\nglobalThis.requestAnimationFrame = (callback) => setTimeout(() => { rafNow += 50; callback(rafNow); }, 0);\nglobalThis.cancelAnimationFrame = (id) => clearTimeout(id);\n// Deterministic under virtual time: never let a stale scroll event close an open menu.\ndocument.addEventListener('scroll', (event) => { if (document.querySelector('.track-context-menu')) event.stopImmediatePropagation(); }, true);\n// No real network in tests: the online lyrics fallback must answer "not found",
 // while the server fixture returns synced lyrics.
 globalThis.fetch = async (url) => {
   const address = String(url);
-  if (address.includes('getLyricsBySongId.view')) return { ok: true, status: 200, json: async () => ({ 'subsonic-response': { status: 'ok', lyricsList: { structuredLyrics: [{ synced: true, line: [1, 2, 3, 4, 5, 6].map((index) => ({ value: 'Synced line ' + index, start: (index - 1) * 30000 })) }] } } }) };
+  if (address.includes('getLyricsBySongId.view')) return { ok: true, status: 200, json: async () => ({ 'subsonic-response': { status: 'ok', lyricsList: { structuredLyrics: [{ synced: true, line: [1, 2, 3, 4, 5, 6].map((index) => ({ value: index === 2 ? '仿佛你在身旁' : 'Synced line ' + index, start: (index - 1) * 30000 })) }] } } }) };
   return { ok: false, status: 404, json: async () => null };
 };\nconst audioStates = new WeakMap(); const audioSources = new WeakMap();\nObject.defineProperty(HTMLMediaElement.prototype, 'src', { configurable: true, get() { return audioSources.get(this) || ''; }, set(value) { audioSources.set(this,value); } });\nObject.defineProperty(HTMLMediaElement.prototype, 'paused', { configurable: true, get() { return audioStates.get(this) !== true; } });\nHTMLMediaElement.prototype.load = function() { this.currentTime=0; };\nHTMLMediaElement.prototype.play = function() { audioStates.set(this,true); this.dispatchEvent(new Event('play')); return Promise.resolve(); };\nHTMLMediaElement.prototype.pause = function() { audioStates.set(this,false); this.dispatchEvent(new Event('pause')); };\ncreateRoot(document.getElementById('root')).render(<App />);\nif (!new URLSearchParams(location.search).has('static')) { ${tests} }`;
   const bundle = await build({ stdin: { contents: entry, resolveDir: resolve('src'), loader: 'tsx' }, bundle: true, platform: 'browser', format: 'iife', write: false, jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
