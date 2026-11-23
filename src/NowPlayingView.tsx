@@ -84,7 +84,7 @@ export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, cu
   });
   const commitOffsetDraft = () => { if (offsetDraft === null) return; const n = Number(offsetDraft.replace(/s$/i, '').trim()); if (offsetDraft.trim() !== '' && Number.isFinite(n)) setLyricsOffset(n); setOffsetDraft(null); };
   const lyricsListRef = useRef<HTMLDivElement>(null);
-  // Synced lyrics move as one translated track (CSS transition), Kopuz-style.
+  // Synced lyrics move as one translated track (CSS transition) for smooth scrolling.
   const lyricsTrackRef = useRef<HTMLDivElement>(null);
   const manualY = useRef<number | null>(null);
   const followY = useRef(0);
@@ -126,7 +126,7 @@ export function NowPlayingView({ audioRef, track, queue, queueIndex, playing, cu
   const total = Number.isFinite(duration) && duration > 0 ? duration : track?.duration || 0;
   const { activeLine, textRef } = useLyricClock(audioRef, lyrics, total, lyricsOffset, tab === 'lyrics' && !closing, playing);
 
-  // Smoothly follow the active synced line, Kopuz-style, with a continuous easing
+  // Smoothly follow the active synced line with a continuous easing
   // animation instead of the browser's interruptible smooth scroll (which stutters
   // when a new line triggers mid-animation).
   useEffect(() => {
