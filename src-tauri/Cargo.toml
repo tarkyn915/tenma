@@ -4,7 +4,7 @@ version = "0.2.1"
 description = "Tenma Player - a clean Navidrome music player"
 authors = ["tarkyn915"]
 license = "MIT"
-repository = "https://github.com/tarkyn915/tenma"
+repository = "https://github.com/tarkyn915/tenma-player"
 edition = "2024"
 rust-version = "1.90"
 

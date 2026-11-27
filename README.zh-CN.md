@@ -8,7 +8,7 @@
 
 专注你的音乐，轻松聆听自己的收藏。
 
-[下载 Windows 版本](https://github.com/tarkyn915/tenma/releases/latest) · [反馈问题](https://github.com/tarkyn915/tenma/issues) · [English](README.md)
+[下载 Windows 版本](https://github.com/tarkyn915/tenma-player/releases/latest) · [反馈问题](https://github.com/tarkyn915/tenma-player/issues) · [English](README.md)
 
 </div>
 
@@ -34,7 +34,7 @@ Tenma Player 播放你自己的音乐——本地文件夹或 Navidrome / Subson
 
 ## 开始使用
 
-1. 在 [Releases](https://github.com/tarkyn915/tenma/releases/latest) 下载 Windows x64 安装包。普通安装选择 `.exe`，也可以使用 `.msi`。
+1. 在 [Releases](https://github.com/tarkyn915/tenma-player/releases/latest) 下载 Windows x64 安装包。普通安装选择 `.exe`，也可以使用 `.msi`。
 2. 安装并启动 **Tenma Player**。
 3. 在 **设置 → 连接** 中选择来源：选择 **本地文件夹**（之后也可以重新扫描），或填写服务器地址和账号，点击 **Test and connect**。
 4. 播放歌曲后，点击底部播放器的封面或歌曲信息，进入 **Now Playing**。
@@ -60,7 +60,7 @@ Tenma Player 播放你自己的音乐——本地文件夹或 Navidrome / Subson
 ### 网页预览
 
 ```powershell
-git clone https://github.com/tarkyn915/tenma.git
+git clone https://github.com/tarkyn915/tenma-player.git
 cd tenma
 npm.cmd ci
 npm.cmd run dev

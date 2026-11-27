@@ -8,10 +8,10 @@
 
 Your library. Your music. A focused listening experience.
 
-[Download for Windows](https://github.com/tarkyn915/tenma/releases/latest) · [Report an issue](https://github.com/tarkyn915/tenma/issues) · [Chinese README](README.zh-CN.md)
+[Download for Windows](https://github.com/tarkyn915/tenma-player/releases/latest) · [Report an issue](https://github.com/tarkyn915/tenma-player/issues) · [Chinese README](README.zh-CN.md)
 
-[![Windows desktop build](https://github.com/tarkyn915/tenma/actions/workflows/desktop.yml/badge.svg)](https://github.com/tarkyn915/tenma/actions/workflows/desktop.yml)
-[![Latest release](https://img.shields.io/github/v/release/tarkyn915/tenma)](https://github.com/tarkyn915/tenma/releases/latest)
+[![Windows desktop build](https://github.com/tarkyn915/tenma-player/actions/workflows/desktop.yml/badge.svg)](https://github.com/tarkyn915/tenma-player/actions/workflows/desktop.yml)
+[![Latest release](https://img.shields.io/github/v/release/tarkyn915/tenma-player)](https://github.com/tarkyn915/tenma-player/releases/latest)
 
 </div>
 
@@ -34,7 +34,7 @@ Tenma Player brings your music into a simple desktop interface. Connect a Navidr
 - **In-app updates** and English / Simplified Chinese UI.
 ## Get started
 
-1. Download the latest Windows x64 installer from [Releases](https://github.com/tarkyn915/tenma/releases/latest). Choose the `.exe` for a regular installation; an `.msi` is also available.
+1. Download the latest Windows x64 installer from [Releases](https://github.com/tarkyn915/tenma-player/releases/latest). Choose the `.exe` for a regular installation; an `.msi` is also available.
 2. Install and open **Tenma Player**.
 3. Choose a source in **Settings → Connection**: pick a **Local folder** (and optionally rescan it later), or enter a server address and credentials and select **Test and connect**.
 4. Play a track. Click its artwork or title in the bottom player to open **Now Playing**.
@@ -60,7 +60,7 @@ Users on versions older than `0.1.3` need to install an updater-enabled version 
 ### Web preview
 
 ```powershell
-git clone https://github.com/tarkyn915/tenma.git
+git clone https://github.com/tarkyn915/tenma-player.git
 cd tenma
 npm.cmd ci
 npm.cmd run dev
